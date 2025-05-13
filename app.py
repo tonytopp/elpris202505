@@ -49,10 +49,10 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'a-default-fallback-secret-key-if-not-set')
 
 # MQTT Configuration
-app.config['MQTT_BROKER_URL'] = os.getenv('MQTT_BROKER_URL', 'localhost')
+app.config['MQTT_BROKER_URL'] = os.getenv('MQTT_BROKER_URL', '192.168.1.199')
 app.config['MQTT_BROKER_PORT'] = int(os.getenv('MQTT_BROKER_PORT', 1883))
-app.config['MQTT_USERNAME'] = os.getenv('MQTT_USERNAME', '')
-app.config['MQTT_PASSWORD'] = os.getenv('MQTT_PASSWORD', '')
+app.config['MQTT_USERNAME'] = os.getenv('MQTT_USERNAME', 'tony')
+app.config['MQTT_PASSWORD'] = os.getenv('MQTT_PASSWORD', '4672')
 app.config['MQTT_KEEPALIVE'] = 60
 app.config['MQTT_TLS_ENABLED'] = os.getenv('MQTT_TLS_ENABLED', 'false').lower() == 'true'
 
@@ -112,6 +112,17 @@ devices = {
         'enabled': True,
         'type': 'switch',
         'description': 'Second test device'
+    },
+    'shelly-roller': {
+        'name': 'Roller Shutter',
+        'state': 'off',
+        'threshold': 100,
+        'mqtt_topic': 'shellyplus2pm-08b61fcf9aa0',
+        'ip_address': '192.168.1.114',
+        'device_id': 'shellyplus2pm-08b61fcf9aa0',
+        'enabled': True,
+        'type': 'shelly',
+        'description': 'Shelly Plus 2PM Roller Shutter'
     }
 }
 
@@ -351,7 +362,139 @@ def handle_mqtt_message(client, userdata, message):
         else:
             print("MQTT: Failing message object was None or lacked topic/payload attributes.")
 
+@app.route('/api/devices/<device_id>/state', methods=['POST'])
+def update_device_state(device_id):
+    if device_id not in devices:
+        return jsonify({'status': 'error', 'message': 'Device not found'}), 404
+    
+    data = request.get_json()
+    new_state = data.get('state')
+    
+    if new_state not in ['on', 'off']:
+        return jsonify({'status': 'error', 'message': 'Invalid state value'}), 400
+    
+    device = devices[device_id]
+    device['state'] = new_state
+    
+    # Handle Shelly Plus 2PM device in roller shutter mode
+    if device.get('type') == 'shelly' and device.get('device_id', '').startswith('shellyplus2pm'):
+        device_base_id = device.get('mqtt_topic')
+        ip_address = device.get('ip_address')
+        
+        # For roller shutters, 'on' means open and 'off' means close
+        cover_action = "open" if new_state == "on" else "close"
+        cover_id = 0  # Always use cover ID 0 for roller shutter
+        
+        # Try HTTP control first
+        if ip_address:
+            try:
+                # For Shelly Plus 2PM (Gen2) in roller shutter mode
+                rpc_url = f"http://{ip_address}/rpc"
+                
+                # Use Cover API for roller shutters
+                rpc_payload = {
+                    "id": 1,
+                    "src": "elprisapp",
+                    "method": f"Cover.{cover_action.capitalize()}",
+                    "params": {"id": cover_id}
+                }
+                
+                print(f"HTTP: Controlling Shelly device via RPC API: {rpc_url} with payload {rpc_payload}")
+                response = requests.post(rpc_url, json=rpc_payload, timeout=5)
+                response.raise_for_status()
+                print(f"HTTP: Shelly device control response: {response.text}")
+            except Exception as e:
+                print(f"HTTP: Error controlling Shelly device via HTTP: {str(e)}")
+                # Continue with MQTT as fallback
+        
+        # Also send MQTT command as backup
+        # Format 1: Cover RPC format
+        command_topic1 = f"{device_base_id}/rpc"
+        command_method = f"Cover.{cover_action.capitalize()}"
+        command_payload1 = json.dumps({
+            "id": 1, 
+            "src": "elprisapp",
+            "method": command_method,
+            "params": {"id": cover_id}
+        })
+        print(f"MQTT: Publishing to {command_topic1}: {command_payload1}")
+        mqtt.publish(command_topic1, command_payload1)
+        
+        # Format 2: MQTT Control format for cover
+        command_topic2 = f"{device_base_id}/command/cover:{cover_id}"
+        command_payload2 = cover_action
+        print(f"MQTT: Publishing to {command_topic2}: {command_payload2}")
+        mqtt.publish(command_topic2, command_payload2)
+    else:
+        # Standard device - just publish the state to MQTT
+        mqtt_topic = device.get('mqtt_topic')
+        if mqtt_topic:
+            mqtt.publish(f"{mqtt_topic}/command", new_state)
+            print(f"MQTT: Published {new_state} to {mqtt_topic}/command")
+    
+    return jsonify({
+        'status': 'success', 
+        'device_id': device_id, 
+        'state': new_state
+    })
+
+@app.route('/api/devices/roller/stop', methods=['POST'])
+def stop_roller_shutter():
+    device_id = 'shelly-roller'
+    if device_id not in devices:
+        return jsonify({'status': 'error', 'message': 'Roller shutter device not found'}), 404
+    
+    device = devices[device_id]
+    device_base_id = device.get('mqtt_topic')
+    ip_address = device.get('ip_address')
+    cover_id = 0  # Always use cover ID 0 for roller shutter
+    
+    # Try HTTP control first
+    if ip_address:
+        try:
+            # For Shelly Plus 2PM (Gen2) in roller shutter mode
+            rpc_url = f"http://{ip_address}/rpc"
+            
+            # Use Cover.Stop API for roller shutters
+            rpc_payload = {
+                "id": 1,
+                "src": "elprisapp",
+                "method": "Cover.Stop",
+                "params": {"id": cover_id}
+            }
+            
+            print(f"HTTP: Stopping Shelly roller shutter via RPC API: {rpc_url} with payload {rpc_payload}")
+            response = requests.post(rpc_url, json=rpc_payload, timeout=5)
+            response.raise_for_status()
+            print(f"HTTP: Shelly device stop response: {response.text}")
+        except Exception as e:
+            print(f"HTTP: Error stopping Shelly roller shutter via HTTP: {str(e)}")
+            # Continue with MQTT as fallback
+    
+    # Also send MQTT command as backup
+    # Format 1: Cover RPC format
+    command_topic1 = f"{device_base_id}/rpc"
+    command_payload1 = json.dumps({
+        "id": 1, 
+        "src": "elprisapp",
+        "method": "Cover.Stop",
+        "params": {"id": cover_id}
+    })
+    print(f"MQTT: Publishing to {command_topic1}: {command_payload1}")
+    mqtt.publish(command_topic1, command_payload1)
+    
+    # Format 2: MQTT Control format for cover
+    command_topic2 = f"{device_base_id}/command/cover:{cover_id}"
+    command_payload2 = "stop"
+    print(f"MQTT: Publishing to {command_topic2}: {command_payload2}")
+    mqtt.publish(command_topic2, command_payload2)
+    
+    return jsonify({
+        'status': 'success', 
+        'message': 'Roller shutter stopped'
+    })
+
 if __name__ == '__main__':
     # Running with use_reloader=False to see if it improves stability
     # The reloader can sometimes cause issues or consume more resources in certain environments.
-    app.run(debug=True, use_reloader=False)
+    app.run(debug=True, host='0.0.0.0', port=8080, use_reloader=False)

@@ -1,12 +1,16 @@
 # Electricity Price Controller
 
-A web application that controls MQTT devices based on electricity prices from elprisetjustnu.se API, with SMHI weather integration for Vänersborg (hardcoded).
+A web application that controls MQTT devices based on electricity prices from elprisetjustnu.se API, with SMHI weather integration for Vänersborg (hardcoded). Now includes support for Shelly Plus 2PM devices in roller shutter mode.
 
 ## Features
 
 - Real-time electricity price monitoring (Today and Tomorrow for SE3)
 - SMHI weather integration for Vänersborg (temperature)
 - MQTT support for device control (Device1, Device2)
+- **Shelly Plus 2PM Roller Shutter Control**:
+  - Dedicated OPEN, CLOSE, and STOP buttons
+  - Uses both HTTP API and MQTT for reliable control
+  - Supports the correct `Cover.Open`, `Cover.Close`, and `Cover.Stop` commands
 - Responsive web interface (Bootstrap 5, Chart.js)
 - Displays current and forecasted electricity prices
 - Control MQTT devices with price thresholds
@@ -46,7 +50,28 @@ A web application that controls MQTT devices based on electricity prices from el
     ```bash
     python app.py
     ```
-6.  Open `http://127.0.0.1:5000` in your browser.
+6.  Open `http://localhost:8080` in your browser.
+
+## Shelly Roller Shutter Configuration
+
+This application includes support for controlling Shelly Plus 2PM devices in roller shutter mode:
+
+1. **Default Configuration**:
+   - The application is pre-configured with a Shelly Plus 2PM device (ID: `shellyplus2pm-08b61fcf9aa0`).
+   - Default IP address: `192.168.1.114`
+   - MQTT topic: `shellyplus2pm-08b61fcf9aa0`
+
+2. **Control Methods**:
+   - **HTTP API**: The application sends commands directly to the Shelly device via its HTTP API.
+   - **MQTT**: As a backup, commands are also sent via MQTT for maximum reliability.
+
+3. **Commands Used**:
+   - `Cover.Open`: Opens the roller shutter (green OPEN button)
+   - `Cover.Close`: Closes the roller shutter (red CLOSE button)
+   - `Cover.Stop`: Stops the roller shutter mid-movement (yellow STOP button)
+
+4. **Customizing**:
+   - To use your own Shelly device, edit the `devices` dictionary in `app.py` to update the device ID, IP address, and MQTT topic.
 
 ## Configuration via Web Interface
 

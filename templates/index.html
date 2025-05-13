@@ -1291,6 +1291,29 @@
                                 </button>
                             </div>
                         </div>
+                        ${device.type === 'shelly' ? `
+                        <div class="d-flex justify-content-between mt-3">
+                            <button class="btn btn-success" 
+                                    onclick="openRollerShutter()"
+                                    ${!device.enabled ? 'disabled' : ''}>
+                                <i class="bi bi-arrow-up"></i> OPEN
+                            </button>
+                            <button class="btn btn-warning" 
+                                    onclick="stopRollerShutter()"
+                                    ${!device.enabled ? 'disabled' : ''}>
+                                <i class="bi bi-stop-fill"></i> STOP
+                            </button>
+                            <button class="btn btn-danger" 
+                                    onclick="closeRollerShutter()"
+                                    ${!device.enabled ? 'disabled' : ''}>
+                                <i class="bi bi-arrow-down"></i> CLOSE
+                            </button>
+                        </div>
+                        <div class="mt-2 text-center">
+                            <span class="text-muted">
+                                MQTT: <code>${device.mqtt_topic}</code>
+                            </span>
+                        </div>` : `
                         <div class="d-flex justify-content-between mt-3">
                             <button class="btn ${isOn ? 'btn-danger' : 'btn-success'}" 
                                     onclick="toggleDevice('${id}')"
@@ -1301,10 +1324,78 @@
                             <span class="text-muted align-self-center">
                                 MQTT: <code>${device.mqtt_topic}</code>
                             </span>
-                        </div>
+                        </div>`}
                     </div>
                 `;
                 container.appendChild(card);
+            }
+        }
+        
+        // Open the roller shutter
+        async function openRollerShutter() {
+            try {
+                // Send open command to the server
+                const response = await fetch('/api/devices/shelly-roller/state', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ state: 'on' })
+                });
+                
+                if (response.ok) {
+                    devices['shelly-roller'].state = 'on';
+                    updateDeviceControls();
+                    showToast('Opening roller shutter', 'success');
+                } else {
+                    const error = await response.json();
+                    throw new Error(error.message || 'Failed to open roller shutter');
+                }
+            } catch (error) {
+                console.error('Error opening roller shutter:', error);
+                showToast(`Error: ${error.message}`, 'danger');
+            }
+        }
+        
+        // Close the roller shutter
+        async function closeRollerShutter() {
+            try {
+                // Send close command to the server
+                const response = await fetch('/api/devices/shelly-roller/state', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ state: 'off' })
+                });
+                
+                if (response.ok) {
+                    devices['shelly-roller'].state = 'off';
+                    updateDeviceControls();
+                    showToast('Closing roller shutter', 'success');
+                } else {
+                    const error = await response.json();
+                    throw new Error(error.message || 'Failed to close roller shutter');
+                }
+            } catch (error) {
+                console.error('Error closing roller shutter:', error);
+                showToast(`Error: ${error.message}`, 'danger');
+            }
+        }
+        
+        // Stop the roller shutter
+        async function stopRollerShutter() {
+            try {
+                // Send stop command to the server
+                const response = await fetch('/api/devices/roller/stop', {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    showToast('Roller shutter stopped', 'success');
+                } else {
+                    const error = await response.json();
+                    throw new Error(error.message || 'Failed to stop roller shutter');
+                }
+            } catch (error) {
+                console.error('Error stopping roller shutter:', error);
+                showToast(`Error: ${error.message}`, 'danger');
             }
         }
         
