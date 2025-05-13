@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Heat Pump & Energy Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .temp-card {
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            text-align: center;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .indoor-temp {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .outdoor-temp {
+            background-color: #cce5ff;
+            color: #004085;
+        }
+        .energy-saved {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        .heatpump-state {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .temp-value {
+            font-size: 3rem;
+            font-weight: bold;
+        }
+        .temp-unit {
+            font-size: 1.5rem;
+            vertical-align: super;
+        }
+        .chart-container {
+            position: relative;
+            height: 300px;
+            margin-bottom: 30px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container py-4">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1 class="mb-0">Heat Pump & Energy Dashboard</h1>
+            <a href="/" class="btn btn-outline-primary">Back to Main App</a>
+        </div>
+
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="temp-card indoor-temp">
+                    <h5>Indoor Temperature</h5>
+                    <div class="temp-value">{{ latest_indoor_temp if latest_indoor_temp != 'N/A' else 'N/A' }}{% if latest_indoor_temp != 'N/A' %}<span class="temp-unit">°C</span>{% endif %}</div>
+                    <p class="mb-0">From Shelly Sensor</p>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="temp-card outdoor-temp">
+                    <h5>Outdoor Temperature</h5>
+                    <div class="temp-value">{{ latest_outdoor_temp if latest_outdoor_temp != None else 'N/A' }}{% if latest_outdoor_temp != None %}<span class="temp-unit">°C</span>{% endif %}</div>
+                    <p class="mb-0">From SMHI</p>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="temp-card energy-saved">
+                    <h5>Energy Saved (24h)</h5>
+                    <div class="temp-value">{{ total_energy_saved }}<span class="temp-unit">kWh</span></div>
+                    <p class="mb-0">Estimated savings</p>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="temp-card heatpump-state">
+                    <h5>Heat Pump</h5>
+                    <div class="temp-value">{{ "ON" if roller_state == "on" else "OFF" if roller_state == "off" else roller_state.upper() }}</div>
+                    <p class="mb-0">Current state</p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header bg-success text-white">
+                        <h5 class="card-title mb-0">Solar Production</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="d-flex align-items-center mb-3">
+                            <div class="me-3">
+                                <div style="font-size: 2.5rem; font-weight: bold;" class="{% if current_solar < 0 %}text-success{% else %}text-danger{% endif %}">
+                                    {{ current_solar }} <span style="font-size: 1.2rem">kW</span>
+                                </div>
+                                <div class="text-muted">
+                                    {% if current_solar < 0 %}
+                                        <span class="badge bg-success">SELLING TO GRID</span> Using excess solar energy
+                                    {% else %}
+                                        <span class="badge bg-warning">BUYING FROM GRID</span> Using grid electricity
+                                    {% endif %}
+                                </div>
+                            </div>
+                            <div class="ms-auto">
+                                <div class="card">
+                                    <div class="card-body">
+                                        <h6 class="card-title">Update Solar Production</h6>
+                                        <div class="input-group">
+                                            <input type="number" id="solarInput" class="form-control" step="0.1" value="{{ current_solar }}" placeholder="kW (negative = selling)">
+                                            <button class="btn btn-primary" onclick="updateSolarProduction()">Update</button>
+                                        </div>
+                                        <small class="text-muted">Negative value = selling to grid</small>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="alert alert-info">
+                            <strong>Solar Benefit:</strong> {{ total_solar_benefit }} kWh saved by using solar energy
+                        </div>
+                        <p><small>When you have excess solar production (negative value), the system will automatically turn ON the heat pump to store thermal energy, even increasing the target temperature to maximize solar usage.</small></p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header bg-info text-white">
+                        <h5 class="card-title mb-0">Smart Control Logic</h5>
+                    </div>
+                    <div class="card-body">
+                        <h6>Current Control Strategy:</h6>
+                        {% if current_solar < 0 %}
+                            <div class="alert alert-success">
+                                <strong>SOLAR OPTIMIZATION MODE</strong><br>
+                                <ul>
+                                    <li>Using excess solar energy to heat</li>
+                                    <li>Target temperature increased to store thermal energy</li>
+                                    <li>Heat pump will run regardless of electricity price</li>
+                                </ul>
+                            </div>
+                        {% else %}
+                            <div class="alert alert-warning">
+                                <strong>PRICE OPTIMIZATION MODE</strong><br>
+                                <ul>
+                                    <li>Heat pump runs based on electricity price and comfort needs</li>
+                                    <li>Target temperature: 21-23°C for comfort</li>
+                                    <li>Will turn off during expensive hours if temperature allows</li>
+                                </ul>
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">Temperature History (24h)</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="chart-container">
+                            <canvas id="temperatureChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">Energy Savings (24h)</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="chart-container">
+                            <canvas id="energyChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">Heat Pump Control</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between">
+                            <button class="btn btn-success" onclick="turnOnHeatPump()">
+                                <i class="bi bi-power"></i> TURN ON
+                            </button>
+                            <button class="btn btn-danger" onclick="turnOffHeatPump()">
+                                <i class="bi bi-power"></i> TURN OFF
+                            </button>
+                        </div>
+                        <div class="mt-3 alert alert-info">
+                            <small><i class="bi bi-info-circle"></i> The heat pump will be controlled based on electricity prices and temperature difference. Turn it on during cheap hours and off during expensive hours.</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Temperature chart
+        const temperatureCtx = document.getElementById('temperatureChart').getContext('2d');
+        const energyCtx = document.getElementById('energyChart').getContext('2d');
+        
+        // Fetch temperature data
+        async function fetchData() {
+            try {
+                const response = await fetch('/api/temperature/data?days=1');
+                const data = await response.json();
+                
+                if (data.records && data.records.length > 0) {
+                    // Sort records by timestamp
+                    const sortedRecords = data.records.sort((a, b) => 
+                        new Date(a.timestamp) - new Date(b.timestamp)
+                    );
+                    
+                    // Extract data for charts
+                    const labels = sortedRecords.map(record => {
+                        const date = new Date(record.timestamp);
+                        return date.toLocaleTimeString('sv-SE', {hour: '2-digit', minute:'2-digit'});
+                    });
+                    
+                    const indoorTemps = sortedRecords.map(record => record.indoor_temp);
+                    const outdoorTemps = sortedRecords.map(record => record.outdoor_temp);
+                    const energySaved = sortedRecords.map(record => record.energy_saved || 0);
+                    const electricityPrices = sortedRecords.map(record => record.electricity_price || 0);
+                    
+                    // Create temperature chart
+                    new Chart(temperatureCtx, {
+                        type: 'line',
+                        data: {
+                            labels: labels,
+                            datasets: [
+                                {
+                                    label: 'Indoor Temperature (°C)',
+                                    data: indoorTemps,
+                                    borderColor: '#155724',
+                                    backgroundColor: 'rgba(21, 87, 36, 0.1)',
+                                    borderWidth: 2,
+                                    tension: 0.1
+                                },
+                                {
+                                    label: 'Outdoor Temperature (°C)',
+                                    data: outdoorTemps,
+                                    borderColor: '#004085',
+                                    backgroundColor: 'rgba(0, 64, 133, 0.1)',
+                                    borderWidth: 2,
+                                    tension: 0.1
+                                }
+                            ]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            scales: {
+                                y: {
+                                    beginAtZero: false,
+                                    title: {
+                                        display: true,
+                                        text: 'Temperature (°C)'
+                                    }
+                                }
+                            }
+                        }
+                    });
+                    
+                    // Create energy savings chart
+                    new Chart(energyCtx, {
+                        type: 'bar',
+                        data: {
+                            labels: labels,
+                            datasets: [
+                                {
+                                    label: 'Energy Saved (kWh)',
+                                    data: energySaved,
+                                    backgroundColor: 'rgba(255, 193, 7, 0.5)',
+                                    borderColor: 'rgba(255, 193, 7, 1)',
+                                    borderWidth: 1
+                                },
+                                {
+                                    label: 'Electricity Price (SEK/kWh)',
+                                    data: electricityPrices,
+                                    backgroundColor: 'rgba(220, 53, 69, 0.5)',
+                                    borderColor: 'rgba(220, 53, 69, 1)',
+                                    borderWidth: 1,
+                                    type: 'line',
+                                    yAxisID: 'y1'
+                                }
+                            ]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            scales: {
+                                y: {
+                                    beginAtZero: true,
+                                    title: {
+                                        display: true,
+                                        text: 'Energy Saved (kWh)'
+                                    }
+                                },
+                                y1: {
+                                    position: 'right',
+                                    beginAtZero: true,
+                                    title: {
+                                        display: true,
+                                        text: 'Electricity Price (SEK/kWh)'
+                                    },
+                                    grid: {
+                                        drawOnChartArea: false
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+            } catch (error) {
+                console.error('Error fetching temperature data:', error);
+            }
+        }
+        
+        // Heat pump control functions
+        async function turnOnHeatPump() {
+            try {
+                const response = await fetch('/api/devices/shelly-roller/state', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ state: 'on' })
+                });
+                
+                if (response.ok) {
+                    alert('Turning ON heat pump');
+                    setTimeout(() => location.reload(), 2000);
+                } else {
+                    alert('Failed to turn on heat pump');
+                }
+            } catch (error) {
+                console.error('Error turning on heat pump:', error);
+                alert('Error turning on heat pump');
+            }
+        }
+        
+        async function turnOffHeatPump() {
+            try {
+                const response = await fetch('/api/devices/shelly-roller/state', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ state: 'off' })
+                });
+                
+                if (response.ok) {
+                    alert('Turning OFF heat pump');
+                    setTimeout(() => location.reload(), 2000);
+                } else {
+                    alert('Failed to turn off heat pump');
+                }
+            } catch (error) {
+                console.error('Error turning off heat pump:', error);
+                alert('Error turning off heat pump');
+            }
+        }
+        
+        // Update solar production
+        async function updateSolarProduction() {
+            try {
+                const solarInput = document.getElementById('solarInput');
+                const production = parseFloat(solarInput.value);
+                
+                if (isNaN(production)) {
+                    alert('Please enter a valid number');
+                    return;
+                }
+                
+                const response = await fetch('/api/solar/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ production: production })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    alert(data.message);
+                    location.reload();
+                } else {
+                    alert('Failed to update solar production');
+                }
+            } catch (error) {
+                console.error('Error updating solar production:', error);
+                alert('Error updating solar production');
+            }
+        }
+        
+        // Load data when page loads
+        document.addEventListener('DOMContentLoaded', fetchData);
+    </script>
+</body>
+</html>

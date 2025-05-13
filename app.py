@@ -93,6 +93,80 @@ weather_cache = {
     'location': None
 }
 
+# Temperature and energy data storage
+class DataStorage:
+    def __init__(self, filename='temperature_data.json', max_days=30):
+        self.filename = filename
+        self.max_days = max_days
+        self.data = self.load_data()
+    
+    def load_data(self):
+        try:
+            if os.path.exists(self.filename):
+                with open(self.filename, 'r') as f:
+                    return json.load(f)
+            return {'hourly_records': []}
+        except Exception as e:
+            print(f"Error loading data: {str(e)}")
+            return {'hourly_records': []}
+    
+    def save_data(self):
+        try:
+            with open(self.filename, 'w') as f:
+                json.dump(self.data, f, indent=2)
+            print(f"Data saved to {self.filename}")
+            return True
+        except Exception as e:
+            print(f"Error saving data: {str(e)}")
+            return False
+    
+    def add_hourly_record(self, indoor_temp, outdoor_temp, roller_position, electricity_price, solar_production=0):
+        now = datetime.now()
+        timestamp = now.strftime("%Y-%m-%d %H:00:00")  # Round to the hour
+        
+        # Check if we already have a record for this hour
+        for record in self.data['hourly_records']:
+            if record['timestamp'] == timestamp:
+                # Update existing record
+                record.update({
+                    'indoor_temp': indoor_temp,
+                    'outdoor_temp': outdoor_temp,
+                    'roller_position': roller_position,
+                    'electricity_price': electricity_price,
+                    'solar_production': solar_production
+                })
+                self.save_data()
+                return
+        
+        # Add new record
+        self.data['hourly_records'].append({
+            'timestamp': timestamp,
+            'indoor_temp': indoor_temp,
+            'outdoor_temp': outdoor_temp,
+            'roller_position': roller_position,
+            'electricity_price': electricity_price,
+            'solar_production': solar_production
+        })
+        
+        # Remove old records (keep only max_days)
+        if len(self.data['hourly_records']) > self.max_days * 24:
+            self.data['hourly_records'] = self.data['hourly_records'][-(self.max_days * 24):]
+        
+        self.save_data()
+    
+    def get_records(self, days=1):
+        now = datetime.now()
+        start_date = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+        
+        # Filter records by date
+        filtered_records = [record for record in self.data['hourly_records'] 
+                          if record['timestamp'] >= start_date]
+        
+        return filtered_records
+
+# Initialize data storage
+data_storage = DataStorage()
+
 # Store device states and configurations
 devices = {
     'device1': {
@@ -334,7 +408,7 @@ def handle_connect(client, userdata, flags, rc):
     else:
         print(f"MQTT: Connection failed, not subscribing to topics. Result code: {rc}")
 
-# Using the original simpler version from the user's code for MQTT message handling
+# Enhanced MQTT message handling with temperature data collection
 @mqtt.on_message()
 def handle_mqtt_message(client, userdata, message):
     try:
@@ -343,14 +417,74 @@ def handle_mqtt_message(client, userdata, message):
         
         print(f"MQTT: Received raw message on topic '{topic}': '{payload}'") # Log all messages
         processed = False
-        for device_id, device_data in devices.items():
-            if topic == f"{device_data['mqtt_topic']}/state":
-                device_data['state'] = payload
-                print(f"MQTT: Device {device_id} state updated to {payload}")
-                processed = True
-                break
+        
+        # Handle Shelly temperature readings
+        if "shellyplus2pm" in topic and "/status" in topic:
+            try:
+                data = json.loads(payload)
+                
+                # Check if this is a temperature reading
+                if 'temperature' in topic or 'temperature:0' in topic:
+                    indoor_temp = None
+                    # Different Shelly models report temperature differently
+                    if 'tC' in data:
+                        indoor_temp = data['tC']  # Temperature in Celsius
+                    elif 'value' in data:
+                        indoor_temp = data['value']  # Some models use this format
+                    
+                    if indoor_temp is not None:
+                        # Store the temperature reading
+                        devices['shelly-roller']['indoor_temp'] = indoor_temp
+                        print(f"Indoor temperature updated: {indoor_temp}°C")
+                        
+                        # Get current outdoor temperature from weather API
+                        outdoor_temp = None
+                        try:
+                            weather_data = get_current_weather()
+                            if weather_data and 'temperature' in weather_data:
+                                outdoor_temp = weather_data['temperature']
+                        except Exception as we:
+                            print(f"Error getting outdoor temperature: {str(we)}")
+                        
+                        # Get current roller position
+                        roller_position = devices['shelly-roller'].get('state', 'unknown')
+                        
+                        # Get current electricity price
+                        current_hour = datetime.now().hour
+                        electricity_price = None
+                        prices = get_electricity_prices()
+                        for price in prices:
+                            price_time = datetime.fromisoformat(price['time_start'].replace('Z', '+00:00'))
+                            if price_time.hour == current_hour and price_time.date() == datetime.now().date():
+                                electricity_price = price['SEK_per_kWh']
+                                break
+                        
+                        # Store hourly record
+                        if current_hour != devices['shelly-roller'].get('last_recorded_hour', None):
+                            data_storage.add_hourly_record(
+                                indoor_temp=indoor_temp,
+                                outdoor_temp=outdoor_temp,
+                                roller_position=roller_position,
+                                electricity_price=electricity_price
+                            )
+                            devices['shelly-roller']['last_recorded_hour'] = current_hour
+                            print(f"Recorded hourly data at {current_hour}:00")
+                        
+                        processed = True
+            except json.JSONDecodeError:
+                print(f"MQTT: Error decoding JSON from topic {topic}")
+        
+        # Handle regular device state updates
         if not processed:
-            print(f"MQTT: Message on topic '{topic}' did not match any device state topics.")
+            for device_id, device_data in devices.items():
+                if topic == f"{device_data['mqtt_topic']}/state":
+                    device_data['state'] = payload
+                    print(f"MQTT: Device {device_id} state updated to {payload}")
+                    processed = True
+                    break
+            
+            if not processed:
+                print(f"MQTT: Message on topic '{topic}' did not match any device state topics.")
 
     except Exception as e:
         print(f"MQTT: CRITICAL ERROR processing message: {str(e)}")
@@ -361,6 +495,36 @@ def handle_mqtt_message(client, userdata, message):
                 print(f"MQTT: Error trying to log failing message details: {str(e_log)}")
         else:
             print("MQTT: Failing message object was None or lacked topic/payload attributes.")
+
+# Helper function to get current weather
+def get_current_weather():
+    forecast = get_weather_forecast()
+    if not forecast or 'timeSeries' not in forecast:
+        return None
+    
+    try:
+        now_utc = datetime.utcnow()
+        closest_forecast = None
+        min_diff = float('inf')
+        
+        for forecast_point in forecast['timeSeries']:
+            forecast_time = datetime.strptime(forecast_point['validTime'], '%Y-%m-%dT%H:%M:%SZ')
+            time_diff = abs((now_utc - forecast_time).total_seconds())
+            if time_diff < min_diff:
+                min_diff = time_diff
+                closest_forecast = forecast_point
+        
+        if closest_forecast:
+            temp_param = next((p for p in closest_forecast['parameters'] if p['name'] == 't'), None)
+            temp = temp_param['values'][0] if temp_param else None
+            return {
+                'temperature': temp,
+                'time': closest_forecast['validTime']
+            }
+    except Exception as e:
+        print(f"Error processing weather data: {str(e)}")
+    
+    return None
 
 @app.route('/api/devices/<device_id>/state', methods=['POST'])
 def update_device_state(device_id):
@@ -493,6 +657,178 @@ def stop_roller_shutter():
         'status': 'success', 
         'message': 'Roller shutter stopped'
     })
+
+@app.route('/api/temperature/data', methods=['GET'])
+def get_temperature_data():
+    days = request.args.get('days', default=1, type=int)
+    records = data_storage.get_records(days=days)
+    
+    # Calculate energy savings if we have enough data
+    if len(records) > 0:
+        for record in records:
+            # Simple energy savings calculation based on temperature difference
+            # and whether the heat pump was in the optimal state
+            if 'indoor_temp' in record and 'outdoor_temp' in record and 'roller_position' in record:
+                indoor_temp = record.get('indoor_temp')
+                outdoor_temp = record.get('outdoor_temp')
+                heatpump_state = record.get('roller_position')  # Using roller_position field for heat pump state
+                electricity_price = record.get('electricity_price', 0)
+                
+                if indoor_temp is not None and outdoor_temp is not None:
+                    # Calculate temperature difference
+                    temp_diff = indoor_temp - outdoor_temp
+                    
+                    # Get solar production data (negative value means excess production/selling to grid)
+                    grid_consumption = record.get('solar_production', 0)
+                    
+                    # Determine optimal heat pump state based on temperatures, electricity price, and solar production
+                    optimal_state = None
+                    target_temp = 22  # Default target temperature
+                    
+                    # If we have excess solar production (negative grid consumption), use it!
+                    if grid_consumption < 0:  # We're producing more than consuming (selling to grid)
+                        optimal_state = 'on'  # Always turn on heat pump to use excess solar
+                        
+                        # If we have significant excess production, increase target temp to store more heat
+                        if grid_consumption < -1.0:  # More than 1kW excess
+                            target_temp = 24  # Store more heat
+                        elif grid_consumption < -2.0:  # More than 2kW excess
+                            target_temp = 25  # Store even more heat
+                    
+                    # If we're buying electricity (positive grid consumption), be more conservative
+                    else:
+                        # If it's cold inside (below 21°C), heat pump should be ON
+                        # unless electricity is very expensive
+                        if indoor_temp < 21:
+                            if electricity_price and electricity_price > 3.0:  # Very expensive electricity
+                                optimal_state = 'off'  # Turn off to save money
+                            else:
+                                optimal_state = 'on'   # Turn on to heat
+                        # If it's comfortable inside (21-23°C)
+                        elif 21 <= indoor_temp <= 23:
+                            if electricity_price and electricity_price > 2.0:  # Expensive electricity
+                                optimal_state = 'off'  # Turn off to save money
+                            else:
+                                optimal_state = 'on'   # Keep on for comfort
+                        # If it's warm inside (above target_temp)
+                        elif indoor_temp > target_temp:
+                            optimal_state = 'off'      # No need for heating
+                    
+                    # Calculate energy savings
+                    energy_saved = 0
+                    solar_benefit = 0
+                    
+                    # Record the target temperature for reference
+                    record['target_temp'] = target_temp
+                    
+                    if optimal_state and heatpump_state == optimal_state:
+                        if grid_consumption < 0:  # We're using excess solar production
+                            # Calculate benefit of using our own solar instead of selling to grid
+                            # Typically, selling price is lower than buying price (about 70% of buying price)
+                            solar_benefit = abs(grid_consumption) * electricity_price * 0.3  # The price difference
+                            energy_saved = solar_benefit
+                            
+                            # Add thermal storage benefit
+                            if indoor_temp > 22:  # We're storing heat above comfort temperature
+                                # Each degree above 22 represents stored thermal energy
+                                thermal_storage = (indoor_temp - 22) * 0.5  # kWh per degree of thermal mass
+                                energy_saved += thermal_storage
+                                
+                        elif optimal_state == 'off' and electricity_price:
+                            # If heat pump is correctly OFF when it should be, savings are based on electricity price
+                            # Assuming heat pump uses about 1.5 kWh per hour when running
+                            energy_saved = 1.5 * electricity_price
+                        elif optimal_state == 'on' and temp_diff < 0:
+                            # If heat pump is correctly ON when it's cold, savings are based on efficiency
+                            # Heat pumps are more efficient than direct electric heating (about 3x)
+                            # Assuming direct electric heating would use 3 kWh for the same heating
+                            energy_saved = 2.0  # kWh saved compared to direct electric heating
+                    
+                    # Add solar production info to the record
+                    record['grid_consumption'] = grid_consumption
+                    record['solar_benefit'] = round(solar_benefit, 2)
+                    
+                    # Add energy savings to the record
+                    record['energy_saved'] = round(energy_saved, 2)
+                    record['optimal_state'] = optimal_state
+    
+    return jsonify({
+        'records': records,
+        'total_records': len(records),
+        'days_requested': days
+    })
+
+@app.route('/api/solar/update', methods=['POST'])
+def update_solar_production():
+    """Update the current solar production data"""
+    try:
+        data = request.get_json()
+        if 'production' not in data:
+            return jsonify({'error': 'Missing production value'}), 400
+            
+        production = float(data['production'])
+        
+        # Store the latest solar production value
+        app.config['SOLAR_PRODUCTION'] = production
+        
+        # Update the latest hourly record with this solar production value
+        records = data_storage.get_records(days=1)
+        if records:
+            latest_record = records[0]
+            indoor_temp = latest_record.get('indoor_temp')
+            outdoor_temp = latest_record.get('outdoor_temp')
+            roller_position = latest_record.get('roller_position')
+            electricity_price = latest_record.get('electricity_price')
+            
+            # Update the record with new solar production
+            data_storage.add_hourly_record(
+                indoor_temp, 
+                outdoor_temp, 
+                roller_position, 
+                electricity_price, 
+                production
+            )
+        
+        return jsonify({
+            'success': True,
+            'message': f'Solar production updated to {production} kW',
+            'production': production
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/temperature-dashboard')
+def temperature_dashboard():
+    # Get the latest 24 hours of data
+    records = data_storage.get_records(days=1)
+    
+    # Calculate total energy saved
+    total_energy_saved = sum(record.get('energy_saved', 0) for record in records)
+    total_solar_benefit = sum(record.get('solar_benefit', 0) for record in records)
+    
+    # Get the latest indoor and outdoor temperatures
+    latest_indoor_temp = devices['shelly-roller'].get('indoor_temp', 'N/A')
+    latest_outdoor_temp = None
+    try:
+        weather_data = get_current_weather()
+        if weather_data and 'temperature' in weather_data:
+            latest_outdoor_temp = weather_data['temperature']
+    except Exception:
+        pass
+    
+    # Get current solar production
+    current_solar = app.config.get('SOLAR_PRODUCTION', 0)
+    
+    return render_template(
+        'temperature_dashboard.html',
+        records=records,
+        total_energy_saved=round(total_energy_saved, 2),
+        total_solar_benefit=round(total_solar_benefit, 2),
+        latest_indoor_temp=latest_indoor_temp,
+        latest_outdoor_temp=latest_outdoor_temp,
+        roller_state=devices['shelly-roller'].get('state', 'unknown'),
+        current_solar=current_solar
+    )
 
 if __name__ == '__main__':
     # Running with use_reloader=False to see if it improves stability
