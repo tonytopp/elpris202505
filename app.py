@@ -1,3 +1,39 @@
+import logging
+import sys # Import sys for more comprehensive logging if needed later
+
+# Configure basic logging to a file
+logging.basicConfig(
+    filename='app_run.log', # Log to this file in the same directory as app.py
+    filemode='w',        # Overwrite the log file on each run
+    level=logging.DEBUG, # Capture all levels of messages (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+# Create a logger instance
+logger = logging.getLogger(__name__)
+
+# Redirect stdout and stderr to the logger
+class StreamToLogger(object):
+    """
+    Fake file-like stream object that redirects writes to a logger instance.
+    """
+    def __init__(self, logger_instance, log_level=logging.INFO):
+        self.logger = logger_instance
+        self.log_level = log_level
+        self.linebuf = ''
+
+    def write(self, buf):
+        for line in buf.rstrip().splitlines():
+            self.logger.log(self.log_level, line.rstrip())
+
+    def flush(self):
+        pass # sys.stdout has a flush method, so we need one too.
+
+sys.stdout = StreamToLogger(logger, logging.INFO)
+sys.stderr = StreamToLogger(logger, logging.ERROR)
+
+print("--- Application stdout/stderr redirected to app_run.log ---")
+
 from flask import Flask, render_template, jsonify, request
 from flask_mqtt import Mqtt
 import requests
@@ -5,11 +41,12 @@ from datetime import datetime, timedelta
 import os
 import json
 from dotenv import load_dotenv
+import pytz
 
 load_dotenv()
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'your-secret-key-here'  # Change this to a secure secret key
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'a-default-fallback-secret-key-if-not-set')
 
 # MQTT Configuration
 app.config['MQTT_BROKER_URL'] = os.getenv('MQTT_BROKER_URL', 'localhost')
@@ -21,17 +58,29 @@ app.config['MQTT_TLS_ENABLED'] = os.getenv('MQTT_TLS_ENABLED', 'false').lower() 
 
 mqtt = Mqtt()
 
-def init_mqtt():
-    try:
-        mqtt.init_app(app)
-        print(f"Connected to MQTT broker at {app.config['MQTT_BROKER_URL']}:{app.config['MQTT_BROKER_PORT']}")
-        return True
-    except Exception as e:
-        print(f"Failed to connect to MQTT broker: {str(e)}")
-        return False
+def init_mqtt(app_context=None):
+    if app_context:
+        with app_context:
+            try:
+                mqtt.init_app(app)
+                print(f"MQTT: Attempting to connect to broker at {app.config['MQTT_BROKER_URL']}:{app.config['MQTT_BROKER_PORT']}")
+                return True
+            except Exception as e:
+                print(f"MQTT: Failed to initialize or connect to broker: {str(e)}")
+                return False
+    else: # Fallback if no app_context provided
+        try:
+            mqtt.init_app(app)
+            print(f"MQTT: Attempting to connect to broker at {app.config['MQTT_BROKER_URL']}:{app.config['MQTT_BROKER_PORT']}")
+            return True
+        except Exception as e:
+            print(f"MQTT: Failed to initialize or connect to broker: {str(e)}")
+            return False
 
-# Initialize MQTT
-init_mqtt()
+# Initialize MQTT with app context
+with app.app_context():
+    if not init_mqtt(app.app_context()):
+        print("MQTT: Initial connection failed. Will rely on Flask-MQTT auto-reconnect.")
 
 # SMHI API Configuration
 SMHI_BASE_URL = "https://opendata-download-metfcst.smhi.se/api"
@@ -67,161 +116,120 @@ devices = {
 }
 
 def get_electricity_prices():
-    # Get current date in Sweden timezone
-    import pytz
-    from datetime import datetime, timedelta
-    
     sweden_tz = pytz.timezone('Europe/Stockholm')
     now = datetime.now(sweden_tz)
-    
-    # Get prices for today and tomorrow
     prices = []
-    
-    for days_ahead in [0, 1]:  # Today and tomorrow
+    for days_ahead in [0, 1]:
         target_date = now + timedelta(days=days_ahead)
         year = target_date.year
         month = target_date.month
         day = target_date.day
-    
-        # Try different URL formats
         date_formats = [
-            f"{year}/{month:02d}-{day:02d}_SE3.json",  # Format: YYYY/MM-DD_SE3.json
-            f"{year}-{month:02d}-{day:02d}_SE3.json", # Format: YYYY-MM-DD_SE3.json
-            f"{year}/{month}-{day}_SE3.json",        # Format: YYYY/M-D_SE3.json
-            f"{year}-{month}-{day}_SE3.json"          # Format: YYYY-M-D_SE3.json
+            f"{year}/{month:02d}-{day:02d}_SE3.json",
+            f"{year}-{month:02d}-{day:02d}_SE3.json",
+            f"{year}/{month}-{day}_SE3.json",
+            f"{year}-{month}-{day}_SE3.json"
         ]
-        
         base_url = "https://www.elprisetjustnu.se/api/v1/prices/"
-        
         for date_str in date_formats:
             url = base_url + date_str
             print(f"Trying URL: {url}")
             try:
-                response = requests.get(url)
+                response = requests.get(url, timeout=10) # Added timeout
                 print(f"Response status: {response.status_code}")
                 if response.status_code == 200:
                     day_prices = response.json()
                     print(f"Successfully retrieved {len(day_prices)} price entries for {target_date.date()}")
-                    # Format the response
-                    for price in day_prices:
+                    for price_item in day_prices:
                         prices.append({
-                            'time_start': price['time_start'],
-                            'SEK_per_kWh': price['SEK_per_kWh'],
+                            'time_start': price_item['time_start'],
+                            'SEK_per_kWh': price_item['SEK_per_kWh'],
                             'date': target_date.date().isoformat()
                         })
-                    break  # Successfully got prices for this day
+                    break
                 elif response.status_code == 404:
                     print(f"404 Not Found for URL: {url}")
                     continue
                 response.raise_for_status()
             except Exception as e:
                 print(f"Error with {url}: {str(e)}")
-    
     if not prices:
-        print("Failed to fetch prices after multiple attempts")
-        # Return some sample data so the app doesn't crash
-        prices = [
-            {
-                'time_start': (now + timedelta(hours=i)).isoformat(),
-                'SEK_per_kWh': 1.5 + (i * 0.1),
-                'date': now.date().isoformat()
-            }
-            for i in range(24)
-        ]
-    
-    # Sort all prices by time
+        print("Failed to fetch prices after multiple attempts, returning empty list.")
+        return []
     prices.sort(key=lambda x: x['time_start'])
     return prices
 
 @app.route('/')
 def index():
-    prices = get_electricity_prices()
-    return render_template('index.html', prices=prices, devices=devices)
+    current_prices = get_electricity_prices()
+    return render_template('index.html', prices=current_prices, devices=devices)
 
-def get_weather_forecast(location_coords=VANERSBORG_COORDS):
-    """Fetch weather forecast from SMHI API"""
+def get_weather_forecast(): # Modified: always Vänersborg, no args
+    """Fetch weather forecast from SMHI API for Vänersborg"""
+    current_location_coords = VANERSBORG_COORDS
     try:
-        # Check if we have a recent cache
-        if (weather_cache['data'] and 
-            weather_cache['location'] == location_coords and
-            weather_cache['timestamp'] and 
-            (datetime.now() - weather_cache['timestamp']).total_seconds() < 3600):  # 1 hour cache
+        if (weather_cache['data'] and
+            weather_cache['location'] == current_location_coords and
+            weather_cache['timestamp'] and
+            (datetime.now() - weather_cache['timestamp']).total_seconds() < 3600): # 1 hour cache
             return weather_cache['data']
-            
-        # Get forecast for the specified coordinates
-        lon, lat = map(float, location_coords.split(','))
+        lon, lat = map(float, current_location_coords.split(','))
         url = f"{SMHI_BASE_URL}/category/pmp3g/version/2/geotype/point/lon/{lon}/lat/{lat}/data.json"
-        
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         forecast = response.json()
-        
-        # Cache the result
         weather_cache.update({
             'timestamp': datetime.now(),
             'data': forecast,
-            'location': location_coords
+            'location': current_location_coords
         })
-        
         return forecast
     except Exception as e:
         print(f"Error fetching weather data: {str(e)}")
         return None
 
 @app.route('/api/weather')
-def api_weather():
-    location = request.args.get('location', VANERSBORG_COORDS)
-    forecast = get_weather_forecast(location)
+def api_weather(): # Modified: no location param
+    forecast = get_weather_forecast()
     if forecast:
         return jsonify(forecast)
     return jsonify({"error": "Could not fetch weather data"}), 500
 
 @app.route('/api/current-weather')
-def api_current_weather():
-    location = request.args.get('location', VANERSBORG_COORDS)
-    forecast = get_weather_forecast(location)
-    
+def api_current_weather(): # Modified: no location param
+    forecast = get_weather_forecast()
     if not forecast or 'timeSeries' not in forecast:
         return jsonify({"error": "Could not fetch weather data"}), 500
-    
     try:
-        # Get the current time and find the closest forecast
-        now = datetime.utcnow()
+        now_utc = datetime.utcnow() # Original now variable was fine
         closest_forecast = None
         min_diff = float('inf')
-        
         for forecast_point in forecast['timeSeries']:
             forecast_time = datetime.strptime(forecast_point['validTime'], '%Y-%m-%dT%H:%M:%SZ')
-            time_diff = abs((now - forecast_time).total_seconds())
-            
+            # Both now_utc (naive UTC) and forecast_time (naive from strptime) are naive.
+            time_diff = abs((now_utc - forecast_time).total_seconds())
             if time_diff < min_diff:
                 min_diff = time_diff
                 closest_forecast = forecast_point
-        
         if closest_forecast:
-            # Extract temperature (in Celsius)
             temp_param = next((p for p in closest_forecast['parameters'] if p['name'] == 't'), None)
             temp = temp_param['values'][0] if temp_param else None
-            
             return jsonify({
                 'temperature': temp,
                 'time': closest_forecast['validTime'],
-                'location': 'Vänersborg' if location == VANERSBORG_COORDS else 'Custom Location'
+                'location': 'Vänersborg' # Modified: always Vänersborg
             })
-            
     except Exception as e:
         print(f"Error processing weather data: {str(e)}")
-    
     return jsonify({"error": "Could not process weather data"}), 500
 
 @app.route('/api/prices')
 def api_prices():
-    prices = get_electricity_prices()
-    return jsonify(prices)
+    current_prices = get_electricity_prices()
+    return jsonify(current_prices)
 
 @app.route('/api/mqtt/status')
 def mqtt_status():
-    """Check MQTT connection status"""
     return jsonify({
         'connected': mqtt.connected,
         'broker': f"{app.config['MQTT_BROKER_URL']}:{app.config['MQTT_BROKER_PORT']}",
@@ -231,30 +239,27 @@ def mqtt_status():
 
 @app.route('/api/mqtt/update', methods=['POST'])
 def update_mqtt_config():
-    """Update MQTT configuration and reconnect"""
     try:
         data = request.get_json()
-        
-        # Update config
         app.config['MQTT_BROKER_URL'] = data.get('MQTT_BROKER_URL', app.config['MQTT_BROKER_URL'])
         app.config['MQTT_BROKER_PORT'] = int(data.get('MQTT_BROKER_PORT', app.config['MQTT_BROKER_PORT']))
         app.config['MQTT_USERNAME'] = data.get('MQTT_USERNAME', app.config['MQTT_USERNAME'])
         app.config['MQTT_PASSWORD'] = data.get('MQTT_PASSWORD', app.config['MQTT_PASSWORD'])
         app.config['MQTT_TLS_ENABLED'] = data.get('MQTT_TLS_ENABLED', 'false').lower() == 'true'
         
-        # Save to .env file
         with open('.env', 'w') as f:
             f.write(f"MQTT_BROKER_URL={app.config['MQTT_BROKER_URL']}\n")
             f.write(f"MQTT_BROKER_PORT={app.config['MQTT_BROKER_PORT']}\n")
             f.write(f"MQTT_USERNAME={app.config['MQTT_USERNAME']}\n")
             f.write(f"MQTT_PASSWORD={app.config['MQTT_PASSWORD']}\n")
             f.write(f"MQTT_TLS_ENABLED={'true' if app.config['MQTT_TLS_ENABLED'] else 'false'}\n")
+            f.write(f"SECRET_KEY={app.config['SECRET_KEY']}\n") # Ensure SECRET_KEY is written
         
-        # Reinitialize MQTT connection
         if mqtt.connected:
             mqtt.disconnect()
-        init_mqtt()
-        
+        with app.app_context(): # Ensure context for re-initialization
+            init_mqtt(app.app_context())
+            
         return jsonify({'status': 'success', 'message': 'MQTT configuration updated'})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 400
@@ -265,8 +270,7 @@ def api_devices():
         data = request.get_json()
         device_id = data.get('id')
         
-        if device_id not in devices and 'name' in data:
-            # Create new device
+        if device_id not in devices and 'name' in data: # Create new device
             devices[device_id] = {
                 'name': data['name'],
                 'state': 'off',
@@ -278,11 +282,9 @@ def api_devices():
             }
             return jsonify({'status': 'created', 'device': devices[device_id]})
         
-        if device_id in devices:
-            # Update existing device
+        if device_id in devices: # Update existing device
             if 'threshold' in data:
                 devices[device_id]['threshold'] = float(data['threshold'])
-                mqtt.publish(f"{devices[device_id]['mqtt_topic']}/threshold", data['threshold'])
             if 'name' in data:
                 devices[device_id]['name'] = data['name']
             if 'mqtt_topic' in data:
@@ -293,10 +295,9 @@ def api_devices():
                 devices[device_id]['type'] = data['type']
             if 'description' in data:
                 devices[device_id]['description'] = data['description']
-            
             return jsonify({'status': 'updated', 'device': devices[device_id]})
         
-        return jsonify({'status': 'error', 'message': 'Invalid device ID'}), 400
+        return jsonify({'status': 'error', 'message': 'Invalid device ID or missing data for new device'}), 400
     
     return jsonify(devices)
 
@@ -309,21 +310,48 @@ def delete_device(device_id):
 
 @mqtt.on_connect()
 def handle_connect(client, userdata, flags, rc):
-    print("Connected to MQTT broker")
+    print(f"MQTT: Connected with result code {rc}")
     # Subscribe to device state topics
-    for device in devices.values():
-        mqtt.subscribe(f"{device['mqtt_topic']}/state")
+    if rc == 0: # Only subscribe if connection was successful
+        for device_id in devices:
+            try:
+                topic = devices[device_id]['mqtt_topic'] + "/state"
+                mqtt.subscribe(topic)
+                print(f"MQTT: Subscribed to {topic}")
+            except Exception as e:
+                print(f"MQTT: Error subscribing to topic for device {device_id}: {str(e)}")
+    else:
+        print(f"MQTT: Connection failed, not subscribing to topics. Result code: {rc}")
 
+# Using the original simpler version from the user's code for MQTT message handling
 @mqtt.on_message()
 def handle_mqtt_message(client, userdata, message):
-    topic = message.topic
-    payload = message.payload.decode()
-    
-    # Update device state in memory when MQTT message is received
-    for device_id, device in devices.items():
-        if topic == f"{device['mqtt_topic']}/state":
-            device['state'] = payload
-            break
+    try:
+        topic = message.topic
+        payload = message.payload.decode()
+        
+        print(f"MQTT: Received raw message on topic '{topic}': '{payload}'") # Log all messages
+        processed = False
+        for device_id, device_data in devices.items():
+            if topic == f"{device_data['mqtt_topic']}/state":
+                device_data['state'] = payload
+                print(f"MQTT: Device {device_id} state updated to {payload}")
+                processed = True
+                break
+        if not processed:
+            print(f"MQTT: Message on topic '{topic}' did not match any device state topics.")
+
+    except Exception as e:
+        print(f"MQTT: CRITICAL ERROR processing message: {str(e)}")
+        if message and hasattr(message, 'topic') and hasattr(message, 'payload'):
+            try:
+                print(f"MQTT: Failing message topic: {message.topic}, raw payload: {message.payload}")
+            except Exception as e_log:
+                print(f"MQTT: Error trying to log failing message details: {str(e_log)}")
+        else:
+            print("MQTT: Failing message object was None or lacked topic/payload attributes.")
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    # Running with use_reloader=False to see if it improves stability
+    # The reloader can sometimes cause issues or consume more resources in certain environments.
+    app.run(debug=True, use_reloader=False)

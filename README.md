@@ -1,104 +1,69 @@
 # Electricity Price Controller
 
-A web application that controls MQTT devices based on electricity prices from elprisetjustnu.se API, with temperature-based scheduling and SMHI weather integration.
+A web application that controls MQTT devices based on electricity prices from elprisetjustnu.se API, with SMHI weather integration for Vänersborg (hardcoded).
 
 ## Features
 
-- Real-time electricity price monitoring
-- Temperature-based scheduling for devices
-- SMHI weather integration for automatic temperature updates
-- MQTT support for device control
-- Responsive web interface
-- Displays current and forecasted electricity prices in a chart
+- Real-time electricity price monitoring (Today and Tomorrow for SE3)
+- SMHI weather integration for Vänersborg (temperature)
+- MQTT support for device control (Device1, Device2)
+- Responsive web interface (Bootstrap 5, Chart.js)
+- Displays current and forecasted electricity prices
 - Control MQTT devices with price thresholds
-- Real-time updates
+- Configuration for MQTT broker details via API and saved to `.env` file.
+- Logging of application activity and errors to `app_run.log`.
 
 ## Prerequisites
 
 - Python 3.8+
 - pip (Python package manager)
-- MQTT broker (e.g., mosquitto, HiveMQ)
+- An MQTT broker (e.g., mosquitto, HiveMQ)
 
 ## Setup
 
-1. Install Python 3.8 or higher
-2. Install dependencies:
-   ```
-   pip install -r requirements.txt
-   ```
-3. Configure environment variables in a `.env` file (copy from `.env.example` if available)
-4. Run the application:
-   ```
-   python app.py
-   ```
-5. Open `http://localhost:5000` in your browser
+1.  **Clone the repository (once it's on GitHub):**
+    ```bash
+    git clone <repository-url-you-will-create>
+    cd elpris202505
+    ```
+2.  **Create a virtual environment (recommended):**
+    ```bash
+    python3 -m venv venv
+    source venv/bin/activate  # On Windows use `venv\Scripts\activate`
+    ```
+3.  **Install dependencies:**
+    ```bash
+    pip install -r requirements.txt
+    ```
+4.  **Configure environment variables:**
+    Copy `.env.example` to a new file named `.env`.
+    ```bash
+    cp .env.example .env
+    ```
+    Review and edit the `.env` file with your actual MQTT broker details and a strong `SECRET_KEY` if desired (though the app has defaults and can save MQTT settings via its API).
 
-## Configuration
+5.  **Run the application:**
+    ```bash
+    python app.py
+    ```
+6.  Open `http://127.0.0.1:5000` in your browser.
 
-- MQTT broker settings can be configured in the web interface
-- Temperature thresholds can be set in the Settings → Temperature Rules
-- Location for weather data can be set in Settings → Location
+## Configuration via Web Interface
 
-## Dependencies
+- **MQTT Broker Settings:** Can be configured via the `/api/mqtt/update` endpoint (typically through a settings page in the web UI if implemented). These settings are saved to the `.env` file.
+- **Device Thresholds:** Can be managed via the `/api/devices` endpoint.
 
-- Flask
-- Flask-MQTT
-- Requests
-- python-dotenv
-- Chart.js (included)
-- Bootstrap 5 (included)
+## MQTT Topics (Example for default devices)
+
+- `home/device1/state` - Device 1 state (on/off)
+- `home/device2/state` - Device 2 state (on/off)
+
+(Note: Threshold topics like `home/device1/threshold` might be published by the app but are not explicitly subscribed to by default in the provided `app.py` for *receiving* threshold changes *from* MQTT by this app version.)
+
+## Log File
+
+Application activity, including errors, is logged to `app_run.log` in the application directory. This file is overwritten each time the application starts.
 
 ## License
 
 MIT
-
-## Prerequisites
-
-- Python 3.7+
-- pip (Python package manager)
-- MQTT broker (e.g., mosquitto, HiveMQ)
-
-## Installation
-
-1. Clone the repository:
-   ```bash
-   git clone <repository-url>
-   cd electricity-price-controller
-   ```
-
-2. Install the required Python packages:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. Create a `.env` file in the project root with your MQTT broker details:
-   ```
-   MQTT_BROKER_URL=your_broker_url
-   MQTT_BROKER_PORT=1883
-   MQTT_USERNAME=your_username
-   MQTT_PASSWORD=your_password
-   ```
-
-## Usage
-
-1. Start the Flask application:
-   ```bash
-   python app.py
-   ```
-
-2. Open your web browser and navigate to `http://localhost:5000`
-
-3. Adjust the price thresholds for your devices using the sliders
-
-## MQTT Topics
-
-The application uses the following MQTT topics:
-
-- `home/device1/threshold` - Set threshold for device 1
-- `home/device2/threshold` - Set threshold for device 2
-- `home/device1/state` - Device 1 state (on/off)
-- `home/device2/state` - Device 2 state (on/off)
-
-## License
-
-This project is open source and available under the MIT License.
