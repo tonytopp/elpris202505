@@ -503,6 +503,19 @@
                                     <div class="small" id="weatherTime">Last updated: --:--</div>
                                 </div>
                             </div>
+                            
+                            <hr class="my-3">
+                            
+                            <div class="d-flex align-items-center">
+                                <div class="me-3">
+                                    <i class="bi bi-house-door fs-1"></i>
+                                </div>
+                                <div>
+                                    <h3 class="mb-0">{{ devices['indoor-sensor'].temperature|default('--') }}°C</h3>
+                                    <small class="text-muted">Indoor Temperature</small>
+                                    <div class="small" id="indoorTempTime">Last updated: {{ devices['indoor-sensor'].last_updated|default('--:--') }}</div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>

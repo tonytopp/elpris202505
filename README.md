@@ -1,21 +1,36 @@
 # Electricity Price Controller
+# Electricity Price & Heat Pump Control System
 
-A web application that controls MQTT devices based on electricity prices from elprisetjustnu.se API, with SMHI weather integration for Vänersborg (hardcoded). Now includes support for Shelly Plus 2PM devices in roller shutter mode.
+A comprehensive web application that controls heat pumps and other devices based on electricity prices, solar production, and temperature data. The system integrates with indoor temperature sensors and 3EM energy meters to optimize energy usage.
 
 ## Features
 
-- Real-time electricity price monitoring (Today and Tomorrow for SE3)
-- SMHI weather integration for Vänersborg (temperature)
-- MQTT support for device control (Device1, Device2)
-- **Shelly Plus 2PM Roller Shutter Control**:
-  - Dedicated OPEN, CLOSE, and STOP buttons
-  - Uses both HTTP API and MQTT for reliable control
-  - Supports the correct `Cover.Open`, `Cover.Close`, and `Cover.Stop` commands
-- Responsive web interface (Bootstrap 5, Chart.js)
-- Displays current and forecasted electricity prices
-- Control MQTT devices with price thresholds
-- Configuration for MQTT broker details via API and saved to `.env` file.
-- Logging of application activity and errors to `app_run.log`.
+- **Real-time Energy Monitoring**:
+  - Electricity price monitoring (Today and Tomorrow for SE3)
+  - 3EM energy meter integration for real-time power consumption/production
+  - Indoor temperature sensor integration
+  - SMHI weather integration for outdoor temperature
+
+- **Smart Heat Pump Control**:
+  - Automatic heat pump state detection based on power consumption changes
+  - Optimizes operation based on electricity prices and solar production
+  - Stores thermal energy during excess solar production periods
+
+- **Energy Dashboard**:
+  - Comprehensive temperature dashboard with indoor/outdoor comparison
+  - Energy meter data visualization (buying/selling status)
+  - Historical data tracking and visualization
+  - Real-time power consumption monitoring
+
+- **Device Control**:
+  - MQTT support for device control
+  - Shelly Plus 2PM Roller Shutter Control for heat pumps
+  - Price threshold-based automation
+
+- **System Features**:
+  - Responsive web interface (Bootstrap 5, Chart.js)
+  - Configuration for MQTT broker details via API and saved to `.env` file
+  - Logging of application activity and errors to `app_run.log`
 
 ## Prerequisites
 

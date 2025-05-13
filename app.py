@@ -42,6 +42,7 @@ import os
 import json
 from dotenv import load_dotenv
 import pytz
+import threading
 
 load_dotenv()
 
@@ -167,6 +168,283 @@ class DataStorage:
 # Initialize data storage
 data_storage = DataStorage()
 
+# Function to fetch indoor sensor data
+def fetch_indoor_sensor_data():
+    """Fetch data from the indoor temperature sensor"""
+    try:
+        print("Attempting to fetch indoor sensor data...")
+        sensor_ip = devices['indoor-sensor']['ip']
+        print(f"Connecting to sensor at {sensor_ip}...")
+        
+        # Store previous values to retain them if no new data
+        prev_temp = devices['indoor-sensor']['temperature']
+        prev_humidity = devices['indoor-sensor']['humidity']
+        prev_battery = devices['indoor-sensor']['battery']
+        
+        try:
+            response = requests.get(f'http://{sensor_ip}/status', timeout=5)
+            print(f"Sensor response status code: {response.status_code}")
+            
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                    print(f"Received data from sensor: {data}")
+                    
+                    # Extract temperature, humidity, and battery data
+                    if 'tmp' in data and data['tmp'].get('is_valid', False):
+                        devices['indoor-sensor']['temperature'] = data['tmp']['value']
+                        print(f"Temperature extracted: {data['tmp']['value']}°C")
+                    else:
+                        print("Temperature data not found or not valid in sensor response")
+                        # Retain previous temperature value
+                        if prev_temp is not None:
+                            devices['indoor-sensor']['temperature'] = prev_temp
+                            print(f"Retained previous temperature value: {prev_temp}°C")
+                    
+                    if 'hum' in data and data['hum'].get('is_valid', False):
+                        devices['indoor-sensor']['humidity'] = data['hum']['value']
+                        print(f"Humidity extracted: {data['hum']['value']}%")
+                    else:
+                        print("Humidity data not found or not valid in sensor response")
+                        # Retain previous humidity value
+                        if prev_humidity is not None:
+                            devices['indoor-sensor']['humidity'] = prev_humidity
+                            print(f"Retained previous humidity value: {prev_humidity}%")
+                    
+                    if 'bat' in data:
+                        devices['indoor-sensor']['battery'] = data['bat']['value']
+                        print(f"Battery level extracted: {data['bat']['value']}%")
+                    else:
+                        print("Battery data not found in sensor response")
+                        # Retain previous battery value
+                        if prev_battery is not None:
+                            devices['indoor-sensor']['battery'] = prev_battery
+                            print(f"Retained previous battery value: {prev_battery}%")
+                    
+                    devices['indoor-sensor']['last_updated'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    
+                    # Use this temperature as the primary indoor temperature
+                    # This will override any temperature from the Shelly device
+                    if devices['indoor-sensor']['temperature'] is not None:
+                        # Update the heat pump device with this temperature
+                        devices['shelly-roller']['indoor_temp'] = devices['indoor-sensor']['temperature']
+                        print(f"Heat pump indoor_temp updated to: {devices['indoor-sensor']['temperature']}°C")
+                    else:
+                        print("No temperature data available to update heat pump")
+                    
+                    return True
+                except ValueError as e:
+                    print(f"Error parsing JSON from sensor: {str(e)}")
+                    print(f"Response content: {response.text[:100]}...")
+                    # Retain previous values on error
+                    if prev_temp is not None:
+                        devices['indoor-sensor']['temperature'] = prev_temp
+                    if prev_humidity is not None:
+                        devices['indoor-sensor']['humidity'] = prev_humidity
+                    if prev_battery is not None:
+                        devices['indoor-sensor']['battery'] = prev_battery
+                    return False
+            else:
+                print(f"Failed to get data from sensor, status code: {response.status_code}")
+                # Retain previous values on error
+                if prev_temp is not None:
+                    devices['indoor-sensor']['temperature'] = prev_temp
+                if prev_humidity is not None:
+                    devices['indoor-sensor']['humidity'] = prev_humidity
+                if prev_battery is not None:
+                    devices['indoor-sensor']['battery'] = prev_battery
+                return False
+        except Exception as e:
+            print(f"Error connecting to sensor: {str(e)}")
+            # Retain previous values on connection error
+            if prev_temp is not None:
+                devices['indoor-sensor']['temperature'] = prev_temp
+            if prev_humidity is not None:
+                devices['indoor-sensor']['humidity'] = prev_humidity
+            if prev_battery is not None:
+                devices['indoor-sensor']['battery'] = prev_battery
+            return False
+    except Exception as e:
+        print(f"Error fetching indoor sensor data: {str(e)}")
+        return False
+
+# Function to fetch energy meter data
+def fetch_energy_meter_data():
+    """Fetch data from the 3EM energy meter"""
+    try:
+        print("Attempting to fetch energy meter data...")
+        meter_ip = devices['energy-meter']['ip']
+        print(f"Connecting to energy meter at {meter_ip}...")
+        
+        # The 3EM meter uses the Shelly RPC API
+        url = f"http://{meter_ip}/rpc/Shelly.GetStatus"
+        print(f"Trying endpoint: {url}")
+        
+        response = requests.get(url, timeout=5)
+        
+        if response.status_code == 200:
+            try:
+                data = response.json()
+                print(f"Received data from energy meter: {data}")
+                
+                # Store the raw data for debugging
+                devices['energy-meter']['raw_data'] = data
+                
+                # Update last_updated timestamp
+                devices['energy-meter']['last_updated'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                
+                # Extract data from the 3EM meter format
+                # The 3EM meter has data in 'em:0' and 'emdata:0' sections
+                if 'em:0' in data:
+                    em_data = data['em:0']
+                    
+                    # Total power consumption across all phases
+                    if 'total_act_power' in em_data:
+                        # Keep in watts for display
+                        consumption = em_data['total_act_power']
+                        devices['energy-meter']['consumption'] = consumption
+                    
+                    # Individual phase data
+                    if 'a_act_power' in em_data:
+                        devices['energy-meter']['phase_a_power'] = round(em_data['a_act_power'], 1)
+                    if 'b_act_power' in em_data:
+                        devices['energy-meter']['phase_b_power'] = round(em_data['b_act_power'], 1)
+                    if 'c_act_power' in em_data:
+                        devices['energy-meter']['phase_c_power'] = round(em_data['c_act_power'], 1)
+                    
+                    # Voltage information
+                    if 'a_voltage' in em_data:
+                        devices['energy-meter']['voltage'] = round(em_data['a_voltage'], 1)
+                    
+                    # Current information
+                    if 'total_current' in em_data:
+                        devices['energy-meter']['current'] = round(em_data['total_current'], 2)
+                
+                # Calculate production based on negative power values
+                # In 3EM meters, negative total power values indicate energy being sent back to the grid
+                total_power = em_data.get('total_act_power', 0)
+                if total_power < 0:
+                    # We have production (negative values mean sending back to grid)
+                    devices['energy-meter']['production'] = total_power
+                    # Update solar production in app config
+                    app.config['SOLAR_PRODUCTION'] = total_power
+                else:
+                    # No production or not sending back to grid
+                    devices['energy-meter']['production'] = 0
+                    
+                # Store the total power value for display
+                devices['energy-meter']['total_power'] = total_power
+                
+                # Detect heat pump state based on power consumption changes
+                # Add current reading to the list of recent readings
+                devices['energy-meter']['power_readings'].append(total_power)
+                
+                # Keep only the last 3 readings
+                if len(devices['energy-meter']['power_readings']) > 3:
+                    devices['energy-meter']['power_readings'] = devices['energy-meter']['power_readings'][-3:]
+                
+                # Need at least 2 readings to detect changes
+                if len(devices['energy-meter']['power_readings']) >= 2:
+                    # Get the two most recent readings
+                    current_power = devices['energy-meter']['power_readings'][-1]
+                    prev_power = devices['energy-meter']['power_readings'][-2]
+                    
+                    # Calculate the change in power consumption
+                    power_change = current_power - prev_power
+                    threshold = devices['energy-meter']['detection_threshold']
+                    print(f"Power change: {power_change}W (from {prev_power}W to {current_power}W)")
+                    
+                    # If power increases by threshold or more, heat pump is likely ON
+                    if power_change >= threshold:
+                        print(f"Detected heat pump turning ON based on power increase of {power_change}W")
+                        devices['shelly-roller']['state'] = 'on'
+                        devices['shelly-roller']['auto_detected'] = True
+                    
+                    # If power decreases by threshold or more, heat pump is likely OFF
+                    elif power_change <= -threshold:
+                        print(f"Detected heat pump turning OFF based on power decrease of {power_change}W")
+                        devices['shelly-roller']['state'] = 'off'
+                        devices['shelly-roller']['auto_detected'] = True
+                    
+                # Energy totals from emdata:0 section
+                if 'emdata:0' in data:
+                    emdata = data['emdata:0']
+                    if 'total_act' in emdata:
+                        devices['energy-meter']['total_consumption_kwh'] = round(emdata['total_act'], 1)
+                    if 'total_act_ret' in emdata:
+                        devices['energy-meter']['total_return_kwh'] = round(emdata['total_act_ret'], 1)
+                
+                print(f"Energy meter data updated successfully")
+                return True
+            except ValueError as e:
+                print(f"Error parsing JSON from energy meter: {str(e)}")
+                print(f"Response content: {response.text[:100]}...")
+                return False
+            except KeyError as e:
+                print(f"Missing expected key in energy meter data: {str(e)}")
+                return False
+        
+        print(f"Failed to get data from energy meter, status code: {response.status_code}")
+        return False
+    except Exception as e:
+        print(f"Error fetching energy meter data: {str(e)}")
+        return False
+
+# Schedule to fetch sensor data every 5 minutes
+def schedule_sensor_data_fetch():
+    fetch_indoor_sensor_data()
+    fetch_energy_meter_data()
+    
+    # Record data for history
+    record_current_data()
+    
+    # Schedule the next fetch in 5 minutes
+    threading.Timer(300, schedule_sensor_data_fetch).start()
+    
+# Function to record current data for history
+def record_current_data():
+    """Record current data to the history file"""
+    try:
+        # Get current values
+        indoor_temp = None
+        if devices['indoor-sensor']['temperature'] is not None:
+            indoor_temp = devices['indoor-sensor']['temperature']
+        elif devices['shelly-roller']['indoor_temp'] is not None:
+            indoor_temp = devices['shelly-roller']['indoor_temp']
+            
+        outdoor_temp = app.config.get('OUTDOOR_TEMP')
+        roller_position = 'open' if devices['shelly-roller']['state'] == 'on' else 'closed'
+        electricity_price = app.config.get('CURRENT_PRICE', 0)
+        
+        # Get solar production from energy meter if available
+        solar_production = 0
+        if devices['energy-meter'].get('total_power') is not None:
+            if devices['energy-meter']['total_power'] < 0:
+                # Negative power means we're producing
+                solar_production = abs(devices['energy-meter']['total_power'])
+        else:
+            # Use manually set solar production if meter not available
+            solar_production = app.config.get('SOLAR_PRODUCTION', 0)
+        
+        # Record data
+        if indoor_temp is not None and outdoor_temp is not None:
+            data_storage.add_hourly_record(
+                indoor_temp=indoor_temp,
+                outdoor_temp=outdoor_temp,
+                roller_position=roller_position,
+                electricity_price=electricity_price,
+                solar_production=solar_production
+            )
+            print(f"Recorded data: Indoor: {indoor_temp}°C, Outdoor: {outdoor_temp}°C, Price: {electricity_price}, Solar: {solar_production}W")
+        else:
+            print("Skipped recording data due to missing temperature values")
+    except Exception as e:
+        print(f"Error recording data: {str(e)}")
+
+
+# Start the scheduler
+schedule_sensor_data_fetch()
+
 # Store device states and configurations
 devices = {
     'device1': {
@@ -178,25 +456,40 @@ devices = {
         'type': 'switch',
         'description': 'First test device'
     },
-    'device2': {
-        'name': 'Device 2',
-        'state': 'off',
-        'threshold': 80,
-        'mqtt_topic': 'home/device2',
-        'enabled': True,
-        'type': 'switch',
-        'description': 'Second test device'
-    },
     'shelly-roller': {
-        'name': 'Roller Shutter',
-        'state': 'off',
-        'threshold': 100,
+        'id': 'shelly-roller',
+        'name': 'Shelly Plus 2PM Roller',
+        'type': 'roller',
+        'state': 'off',  # Default to 'off' instead of 'unknown' for better UX
+        'indoor_temp': None,
         'mqtt_topic': 'shellyplus2pm-08b61fcf9aa0',
         'ip_address': '192.168.1.114',
         'device_id': 'shellyplus2pm-08b61fcf9aa0',
         'enabled': True,
-        'type': 'shelly',
-        'description': 'Shelly Plus 2PM Roller Shutter'
+        'auto_detected': False  # Flag to indicate if state was auto-detected
+    },
+    'indoor-sensor': {
+        'id': 'indoor-sensor',
+        'name': 'Indoor Temperature Sensor',
+        'type': 'sensor',
+        'ip': '192.168.1.239',
+        'temperature': None,
+        'humidity': None,
+        'battery': None,
+        'last_updated': None
+    },
+    'energy-meter': {
+        'id': 'energy-meter',
+        'name': '3EM Energy Meter',
+        'type': 'meter',
+        'ip': '192.168.1.194',
+        'consumption': None,
+        'production': None,
+        'voltage': None,
+        'current': None,
+        'last_updated': None,
+        'power_readings': [],  # Store recent power readings for more reliable detection
+        'detection_threshold': 2000  # 2kW threshold for heat pump detection
     }
 }
 
@@ -392,6 +685,113 @@ def delete_device(device_id):
         deleted_device = devices.pop(device_id)
         return jsonify({'status': 'deleted', 'device': deleted_device})
     return jsonify({'status': 'error', 'message': 'Device not found'}), 404
+
+def fetch_indoor_sensor_data():
+    """Fetch data from the indoor temperature sensor"""
+    try:
+        sensor_ip = devices['indoor-sensor']['ip']
+        response = requests.get(f'http://{sensor_ip}/status', timeout=5)
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            # Extract temperature, humidity, and battery data
+            if 'tmp' in data and data['tmp']['is_valid']:
+                devices['indoor-sensor']['temperature'] = data['tmp']['value']
+            
+            if 'hum' in data and data['hum']['is_valid']:
+                devices['indoor-sensor']['humidity'] = data['hum']['value']
+            
+            if 'bat' in data:
+                devices['indoor-sensor']['battery'] = data['bat']['value']
+            
+            devices['indoor-sensor']['last_updated'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            # Use this temperature as the primary indoor temperature
+            # This will override any temperature from the Shelly device
+            if devices['indoor-sensor']['temperature'] is not None:
+                # Update the heat pump device with this temperature
+                devices['shelly-roller']['indoor_temp'] = devices['indoor-sensor']['temperature']
+            
+            return True
+        return False
+    except Exception as e:
+        print(f"Error fetching indoor sensor data: {str(e)}")
+        return False
+
+def update_device_state(device_id, state):
+    """Update device state"""
+    if device_id in devices:
+        devices[device_id]['state'] = state
+        return True
+    return False
+
+@app.route('/api/devices/<device_id>/state', methods=['POST'])
+def update_device_state_api(device_id):
+    if device_id not in devices:
+        return jsonify({'status': 'error', 'message': 'Device not found'}), 404
+    
+    data = request.get_json()
+    new_state = data.get('state')
+    
+    if new_state not in ['on', 'off']:
+        return jsonify({'status': 'error', 'message': 'Invalid state value'}), 400
+    
+    device = devices[device_id]
+    device['state'] = new_state
+    
+    # Handle Shelly Plus 2PM device in roller shutter mode
+    if device.get('type') == 'shelly' and device.get('device_id', '').startswith('shellyplus2pm'):
+        device_base_id = device.get('mqtt_topic')
+        ip_address = device.get('ip_address')
+        
+        # For roller shutters, 'on' means open and 'off' means close
+        cover_action = "open" if new_state == "on" else "close"
+        cover_id = 0  # Always use cover ID 0 for roller shutter
+        
+        # Try HTTP control first
+        if ip_address:
+            try:
+                # For Shelly Plus 2PM (Gen2) in roller shutter mode
+                rpc_url = f"http://{ip_address}/rpc"
+                
+                # Use Cover API for roller shutters
+                rpc_payload = {
+                    "id": 1,
+                    "src": "elprisapp",
+                    "method": f"Cover.{cover_action.capitalize()}",
+                    "params": {"id": cover_id}
+                }
+                
+                print(f"HTTP: Controlling Shelly device via RPC API: {rpc_url} with payload {rpc_payload}")
+                response = requests.post(rpc_url, json=rpc_payload, timeout=5)
+                response.raise_for_status()
+                print(f"HTTP: Shelly device control response: {response.text}")
+            except Exception as e:
+                print(f"HTTP: Error controlling Shelly device via HTTP: {str(e)}")
+                # Continue with MQTT as fallback
+        
+        # Also send MQTT command as backup
+        # Format 1: Cover RPC format
+        command_topic1 = f"{device_base_id}/rpc"
+        command_method = f"Cover.{cover_action.capitalize()}"
+        command_payload1 = json.dumps({
+            "id": 1, 
+            "src": "elprisapp",
+            "method": command_method,
+            "params": {"id": cover_id}
+        })
+        print(f"MQTT: Publishing to {command_topic1}: {command_payload1}")
+        mqtt.publish(command_topic1, command_payload1)
+        
+        # Format 2: MQTT Control format for cover
+        command_topic2 = f"{device_base_id}/command/cover:{cover_id}"
+        command_payload2 = cover_action
+        print(f"MQTT: Publishing to {command_topic2}: {command_payload2}")
+        mqtt.publish(command_topic2, command_payload2)
+    else:
+        # Standard device - just publish the state to MQTT
+        pass
 
 @mqtt.on_connect()
 def handle_connect(client, userdata, flags, rc):
@@ -806,8 +1206,21 @@ def temperature_dashboard():
     total_energy_saved = sum(record.get('energy_saved', 0) for record in records)
     total_solar_benefit = sum(record.get('solar_benefit', 0) for record in records)
     
+    # Fetch the latest data from sensors and meters
+    fetch_indoor_sensor_data()
+    fetch_energy_meter_data()
+    
     # Get the latest indoor and outdoor temperatures
-    latest_indoor_temp = devices['shelly-roller'].get('indoor_temp', 'N/A')
+    # First try to get from indoor sensor, then from Shelly device, default to N/A
+    if devices['indoor-sensor'].get('temperature') is not None:
+        latest_indoor_temp = devices['indoor-sensor']['temperature']
+        print(f"Using indoor sensor temperature: {latest_indoor_temp}°C")
+    elif devices['shelly-roller'].get('indoor_temp') is not None:
+        latest_indoor_temp = devices['shelly-roller']['indoor_temp']
+        print(f"Using Shelly device temperature: {latest_indoor_temp}°C")
+    else:
+        latest_indoor_temp = 'N/A'
+        print("No temperature data available from any sensor")
     latest_outdoor_temp = None
     try:
         weather_data = get_current_weather()
@@ -827,10 +1240,30 @@ def temperature_dashboard():
         latest_indoor_temp=latest_indoor_temp,
         latest_outdoor_temp=latest_outdoor_temp,
         roller_state=devices['shelly-roller'].get('state', 'unknown'),
-        current_solar=current_solar
+        current_solar=current_solar,
+        devices=devices  # Pass the entire devices dictionary to access all sensor data
+    )
+
+@app.route('/history')
+def history_view():
+    # Get days parameter from query string, default to 7
+    days = request.args.get('days', default=7, type=int)
+    
+    # Get the historical records
+    records = data_storage.get_records(days=days)
+    
+    # Record current data to ensure we have the latest
+    record_current_data()
+    
+    # Get the filename where data is stored
+    data_filename = os.path.abspath(data_storage.filename)
+    
+    return render_template(
+        'history.html',
+        records=records,
+        days=days,
+        data_filename=data_filename
     )
 
 if __name__ == '__main__':
-    # Running with use_reloader=False to see if it improves stability
-    # The reloader can sometimes cause issues or consume more resources in certain environments.
-    app.run(debug=True, host='0.0.0.0', port=8080, use_reloader=False)
+    app.run(host='0.0.0.0', port=8080, debug=False)

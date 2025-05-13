@@ -13,6 +13,10 @@
             margin-bottom: 20px;
             text-align: center;
             box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
         }
         .indoor-temp {
             background-color: #d4edda;
@@ -31,8 +35,9 @@
             color: #721c24;
         }
         .temp-value {
-            font-size: 3rem;
+            font-size: 2.5rem;
             font-weight: bold;
+            margin: 10px 0;
         }
         .temp-unit {
             font-size: 1.5rem;
@@ -49,15 +54,21 @@
     <div class="container py-4">
         <div class="d-flex justify-content-between align-items-center mb-4">
             <h1 class="mb-0">Heat Pump & Energy Dashboard</h1>
-            <a href="/" class="btn btn-outline-primary">Back to Main App</a>
+            <div>
+                <a href="/history" class="btn btn-outline-info me-2">View History</a>
+                <a href="/" class="btn btn-outline-primary">Back to Main App</a>
+            </div>
         </div>
 
         <div class="row mb-4">
             <div class="col-md-3">
                 <div class="temp-card indoor-temp">
                     <h5>Indoor Temperature</h5>
-                    <div class="temp-value">{{ latest_indoor_temp if latest_indoor_temp != 'N/A' else 'N/A' }}{% if latest_indoor_temp != 'N/A' %}<span class="temp-unit">°C</span>{% endif %}</div>
-                    <p class="mb-0">From Shelly Sensor</p>
+                    <div class="temp-value">{% if latest_indoor_temp is not none and latest_indoor_temp != 'N/A' %}{{ latest_indoor_temp }}{% else %}N/A{% endif %}{% if latest_indoor_temp is not none and latest_indoor_temp != 'N/A' %}<span class="temp-unit">°C</span>{% endif %}</div>
+                    <p class="mb-0">From Indoor Sensor</p>
+                    {% if devices['indoor-sensor'].last_updated is defined and devices['indoor-sensor'].last_updated is not none %}
+                    <small class="text-muted">Last updated: {{ devices['indoor-sensor'].last_updated }}</small>
+                    {% endif %}
                 </div>
             </div>
             <div class="col-md-3">
@@ -77,30 +88,93 @@
             <div class="col-md-3">
                 <div class="temp-card heatpump-state">
                     <h5>Heat Pump</h5>
-                    <div class="temp-value">{{ "ON" if roller_state == "on" else "OFF" if roller_state == "off" else roller_state.upper() }}</div>
+                    <div class="temp-value" style="font-size: 2.5rem;">{{ "ON" if roller_state == "on" else "OFF" if roller_state == "off" else "UNKNOWN" }}</div>
                     <p class="mb-0">Current state</p>
+                    {% if devices['shelly-roller'].auto_detected %}
+                    <small class="text-success"><strong>Auto-detected</strong> from power changes</small>
+                    {% else %}
+                    <small class="text-muted">Waiting for power change detection...</small>
+                    {% endif %}
                 </div>
             </div>
         </div>
         
         <div class="row mb-4">
-            <div class="col-md-6">
+            <div class="col-md-3">
+                <div class="card">
+                    <div class="card-header bg-info text-white">
+                        <h5 class="card-title mb-0">Indoor Sensor Details</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="d-flex flex-column">
+                            <div class="mb-3">
+                                <h6>Humidity</h6>
+                                <div style="font-size: 1.8rem; font-weight: bold;">
+                                    {{ devices['indoor-sensor'].humidity|default('N/A') }}{% if devices['indoor-sensor'].humidity is not none %}<span style="font-size: 1rem">%</span>{% endif %}
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <h6>Battery</h6>
+                                <div style="font-size: 1.5rem;" class="{% if devices['indoor-sensor'].battery is not none and devices['indoor-sensor'].battery > 20 %}text-success{% elif devices['indoor-sensor'].battery is not none %}text-danger{% else %}text-muted{% endif %}">
+                                    {{ devices['indoor-sensor'].battery|default('N/A') }}{% if devices['indoor-sensor'].battery is not none %}<span style="font-size: 0.8rem">%</span>{% endif %}
+                                </div>
+                            </div>
+                            <div>
+                                <small class="text-muted">Last updated: {{ devices['indoor-sensor'].last_updated|default('Never') }}</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-9">
                 <div class="card">
                     <div class="card-header bg-success text-white">
-                        <h5 class="card-title mb-0">Solar Production</h5>
+                        <h5 class="card-title mb-0">Energy Meter Data</h5>
                     </div>
                     <div class="card-body">
                         <div class="d-flex align-items-center mb-3">
                             <div class="me-3">
-                                <div style="font-size: 2.5rem; font-weight: bold;" class="{% if current_solar < 0 %}text-success{% else %}text-danger{% endif %}">
-                                    {{ current_solar }} <span style="font-size: 1.2rem">kW</span>
+                                <div style="font-size: 2.5rem; font-weight: bold;" class="{% if devices['energy-meter'].total_power is defined and devices['energy-meter'].total_power < 0 %}text-success{% else %}text-danger{% endif %}">
+                                    {% if devices['energy-meter'].total_power is defined %}
+                                        {{ devices['energy-meter'].total_power|round|int }} <span style="font-size: 1.2rem">W</span>
+                                    {% else %}
+                                        {{ current_solar }} <span style="font-size: 1.2rem">kW</span>
+                                    {% endif %}
                                 </div>
                                 <div class="text-muted">
-                                    {% if current_solar < 0 %}
+                                    {% if devices['energy-meter'].total_power is defined and devices['energy-meter'].total_power < 0 %}
+                                        <span class="badge bg-success">SELLING TO GRID</span> Using excess solar energy
+                                    {% elif devices['energy-meter'].total_power is defined %}
+                                        <span class="badge bg-warning">BUYING FROM GRID</span> Using grid electricity
+                                    {% elif current_solar < 0 %}
                                         <span class="badge bg-success">SELLING TO GRID</span> Using excess solar energy
                                     {% else %}
                                         <span class="badge bg-warning">BUYING FROM GRID</span> Using grid electricity
                                     {% endif %}
+                                </div>
+                            </div>
+                            
+                            <div class="ms-3 border-start ps-3">
+                                <h6>Live Meter Data</h6>
+                                <div class="d-flex flex-column">
+                                    {% if devices['energy-meter'].total_power is defined %}
+                                    <div class="mb-2">
+                                        <strong>Total Power:</strong> 
+                                        <span class="{% if devices['energy-meter'].total_power < 0 %}text-success{% else %}text-danger{% endif %}">
+                                            {{ devices['energy-meter'].total_power|round|int }} W
+                                            {% if devices['energy-meter'].total_power < 0 %}
+                                            (SELLING)
+                                            {% else %}
+                                            (BUYING)
+                                            {% endif %}
+                                        </span>
+                                    </div>
+                                    {% endif %}
+                                    
+                                    <div>
+                                        <small class="text-muted">Last updated: {{ devices['energy-meter'].last_updated|default('Never') }}</small>
+                                    </div>
                                 </div>
                             </div>
                             <div class="ms-auto">
@@ -156,7 +230,59 @@
         </div>
 
         <div class="row mb-4">
-            <div class="col-12">
+            <div class="col-md-6">
+                <div class="card mb-4">
+                    <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                        <span class="fw-bold">Outdoor Temperature</span>
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" role="switch" id="useAutoWeather" checked>
+                            <label class="form-check-label" for="useAutoWeather">Auto</label>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="d-flex align-items-center">
+                            <i class="fas fa-cloud-sun fa-3x me-3"></i>
+                            <div>
+                                <div class="fs-1 fw-bold">{{ latest_outdoor_temp }}°C</div>
+                                <div>Vänersborg</div>
+                                <div class="small text-muted">Last updated: {{ devices.get('weather', {}).get('last_updated', '00:00:00') }}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-6">
+                <div class="card mb-4">
+                    <div class="card-header bg-light">
+                        <span class="fw-bold">Hourly Prices</span>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="priceChart" height="200"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header bg-light">
+                        <span class="fw-bold">Indoor Temperature</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="d-flex align-items-center">
+                            <i class="fas fa-home fa-3x me-3"></i>
+                            <div>
+                                <div class="fs-1 fw-bold">{{ latest_indoor_temp }}°C</div>
+                                <div>From Indoor Sensor</div>
+                                <div class="small text-muted">Last updated: {{ devices['indoor-sensor'].last_updated }}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-8">
                 <div class="card">
                     <div class="card-header">
                         <h5 class="card-title mb-0">Temperature History (24h)</h5>
@@ -325,6 +451,42 @@
                             }
                         }
                     });
+                    
+                    // Indoor sensor details
+                    const indoorSensorHtml = `
+                        <div class="mb-3">
+                            <h6>Humidity</h6>
+                            <div style="font-size: 1.8rem; font-weight: bold;">
+                                {% if devices['indoor-sensor'].humidity is not none %}
+                                {{ devices['indoor-sensor'].humidity }}%
+                                {% else %}
+                                None
+                                {% endif %}
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <h6>Battery</h6>
+                            <div style="font-size: 1.8rem; font-weight: bold;">
+                                {% if devices['indoor-sensor'].battery is not none %}
+                                {{ devices['indoor-sensor'].battery }}%
+                                {% else %}
+                                None
+                                {% endif %}
+                            </div>
+                        </div>
+                        <div>
+                            <h6>Last updated:</h6>
+                            <div>
+                                {% if devices['indoor-sensor'].last_updated is not none %}
+                                {{ devices['indoor-sensor'].last_updated }}
+                                <br><small class="text-muted">(Values retained when sensor is sleeping)</small>
+                                {% else %}
+                                None
+                                {% endif %}
+                            </div>
+                        </div>
+                    `;
+                    document.getElementById('indoor-sensor-details').innerHTML = indoorSensorHtml;
                 }
             } catch (error) {
                 console.error('Error fetching temperature data:', error);
