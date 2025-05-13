@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<!-- Previous head content remains the same until line 272 -->
+        window.currentEditDeviceId = null;
+        window.priceChart = null;
+        
+        // Initialize the application
+        document.addEventListener('DOMContentLoaded', () => {
+            // Initialize Bootstrap tooltips
+            const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+            tooltipTriggerList.map(function (tooltipTriggerEl) {
+                return new bootstrap.Tooltip(tooltipTriggerEl);
+            });
+            
+            // Initialize event listeners
+            const saveBtn = document.getElementById('saveDeviceBtn');
+            const deleteBtn = document.getElementById('deleteDeviceBtn');
+            const addForm = document.getElementById('addDeviceForm');
+            const tempInput = document.getElementById('outdoorTemp');
+            
+            if (saveBtn) saveBtn.addEventListener('click', saveDevice);
+            if (deleteBtn) deleteBtn.addEventListener('click', deleteDevice);
+            if (addForm) addForm.addEventListener('submit', addDevice);
+            if (tempInput) {
+                tempInput.addEventListener('input', () => {
+                    updateCheapestHours();
+                    updatePriceListChart();
+                });
+            }
+            
+            // Load initial data
+            fetchData().then(() => {
+                updatePriceListChart();
+            });
+            
+            // Set up periodic updates
+            setInterval(() => {
+                fetchData().then(() => {
+                    updatePriceListChart();
+                });
+            }, 60000); // Update data every minute
+            
+            // Initialize toast container if it doesn't exist
+            if (!document.getElementById('toastContainer')) {
+                const toastContainer = document.createElement('div');
+                toastContainer.id = 'toastContainer';
+                toastContainer.className = 'position-fixed bottom-0 end-0 p-3';
+                toastContainer.style.zIndex = '11';
+                document.body.appendChild(toastContainer);
+            }

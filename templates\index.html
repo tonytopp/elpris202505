@@ -1,0 +1,1584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Electricity Price Controller</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mqtt/dist/mqtt.min.js"></script>
+    <style>
+        .price-card {
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+        .price-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .low-price { background-color: #d4edda !important; }
+        .medium-price { background-color: #fff3cd !important; }
+        .high-price { background-color: #f8d7da !important; }
+    </style>
+</head>
+<body>
+    <!-- Settings Modal -->
+    <div class="modal fade" id="settingsModal" tabindex="-1" aria-labelledby="settingsModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="settingsModalLabel">Device Settings</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <ul class="nav nav-tabs" id="settingsTabs" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link active" id="mqtt-tab" data-bs-toggle="tab" data-bs-target="#mqtt-tab-pane" type="button" role="tab">MQTT Settings</button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="devices-tab" data-bs-toggle="tab" data-bs-target="#devices-tab-pane" type="button" role="tab">Devices</button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="add-device-tab" data-bs-toggle="tab" data-bs-target="#add-device-tab-pane" type="button" role="tab">Add Device</button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="settings-tab" data-bs-toggle="tab" data-bs-target="#settings-tab-pane" type="button" role="tab">Temperature Settings</button>
+                        </li>
+                    </ul>
+                    <div class="tab-content p-3 border border-top-0 rounded-bottom" id="settingsTabsContent">
+                        <div class="tab-pane fade show active" id="mqtt-tab-pane" role="tabpanel" aria-labelledby="mqtt-tab">
+                            <div id="mqttStatus" class="mb-3">
+                                <h5>MQTT Connection Status</h5>
+                                <div class="d-flex align-items-center mb-3">
+                                    <div id="mqttStatusIndicator" class="spinner-border spinner-border-sm text-secondary me-2" role="status">
+                                        <span class="visually-hidden">Loading...</span>
+                                    </div>
+                                    <span id="mqttStatusText">Connecting to MQTT broker...</span>
+                                </div>
+                                <div id="mqttConnectionDetails" class="small text-muted"></div>
+                            </div>
+                            <form id="mqttSettingsForm">
+                                <div class="mb-3">
+                                    <label for="mqttBroker" class="form-label">Broker URL</label>
+                                    <input type="text" class="form-control" id="mqttBroker" required>
+                                </div>
+                                <div class="row mb-3">
+                                    <div class="col">
+                                        <label for="mqttPort" class="form-label">Port</label>
+                                        <input type="number" class="form-control" id="mqttPort" value="1883" required>
+                                    </div>
+                                    <div class="col">
+                                        <div class="form-check form-switch mt-4 pt-2">
+                                            <input class="form-check-input" type="checkbox" id="mqttTLS">
+                                            <label class="form-check-label" for="mqttTLS">Use TLS</label>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="mqttUsername" class="form-label">Username (optional)</label>
+                                    <input type="text" class="form-control" id="mqttUsername">
+                                </div>
+                                <div class="mb-3">
+                                    <label for="mqttPassword" class="form-label">Password (optional)</label>
+                                    <input type="password" class="form-control" id="mqttPassword">
+                                </div>
+                                <button type="submit" class="btn btn-primary">Save & Connect</button>
+                            </form>
+                        </div>
+                        <div class="tab-pane fade" id="devices-tab-pane" role="tabpanel" aria-labelledby="devices-tab">
+                            <div id="devicesList" class="list-group">
+                                <!-- Devices will be listed here -->
+                            </div>
+                        </div>
+                        <div class="tab-pane fade" id="settings-tab-pane" role="tabpanel" aria-labelledby="settings-tab">
+                            <ul class="nav nav-tabs mb-3" id="settingsTabs" role="tablist">
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link active" id="temp-hours-tab" data-bs-toggle="tab" data-bs-target="#temp-hours" type="button" role="tab">Temperature Rules</button>
+                                </li>
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link" id="location-tab" data-bs-toggle="tab" data-bs-target="#location" type="button" role="tab">Location</button>
+                                </li>
+                            </ul>
+                            <div class="tab-content">
+                                <div class="tab-pane fade show active" id="temp-hours" role="tabpanel" aria-labelledby="temp-hours-tab">
+                                    <div class="mb-3">
+                                        <h5>Temperature to Hours Configuration</h5>
+                                        <p class="text-muted">Define how many hours to run based on temperature ranges</p>
+                                        <div id="tempHoursSettings">
+                                            <!-- Dynamic fields will be added here -->
+                                        </div>
+                                        <button type="button" class="btn btn-sm btn-primary mt-2" onclick="addTempHourSetting()">
+                                            <i class="bi bi-plus"></i> Add Rule
+                                        </button>
+                                        <button type="button" class="btn btn-sm btn-success mt-2 ms-2" onclick="saveTempHourSettings()">
+                                            <i class="bi bi-save"></i> Save Settings
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="tab-pane fade" id="location" role="tabpanel" aria-labelledby="location-tab">
+                                    <div class="mb-3">
+                                        <h5>Location Settings</h5>
+                                        <p class="text-muted">Set your location for weather data</p>
+                                        <div class="mb-3">
+                                            <label for="locationName" class="form-label">Location</label>
+                                            <select class="form-select" id="locationName">
+                                                <option value="12.3167,58.3833">Vänersborg</option>
+                                                <option value="11.9666,57.7072">Göteborg</option>
+                                                <option value="18.0686,59.3294">Stockholm</option>
+                                                <option value="13.0000,55.6000">Malmö</option>
+                                                <option value="custom">Custom Coordinates</option>
+                                            </select>
+                                        </div>
+                                        <div id="customCoords" class="d-none">
+                                            <div class="row g-2">
+                                                <div class="col">
+                                                    <label for="customLat" class="form-label">Latitude</label>
+                                                    <input type="number" step="0.0001" class="form-control" id="customLat" placeholder="e.g., 58.3833">
+                                                </div>
+                                                <div class="col">
+                                                    <label for="customLon" class="form-label">Longitude</label>
+                                                    <input type="number" step="0.0001" class="form-control" id="customLon" placeholder="e.g., 12.3167">
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="mt-3">
+                                            <button type="button" class="btn btn-primary" onclick="saveLocationSettings()">
+                                                <i class="bi bi-geo-alt"></i> Save Location
+                                            </button>
+                                        </div>
+                                        <div id="currentWeather" class="mt-3">
+                                            <!-- Current weather will be displayed here -->
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tab-pane fade" id="add-device-tab-pane" role="tabpanel" aria-labelledby="add-device-tab">
+                            <form id="addDeviceForm">
+                                <div class="mb-3">
+                                    <label for="deviceName" class="form-label">Device Name</label>
+                                    <input type="text" class="form-control" id="deviceName" required>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="deviceDescription" class="form-label">Description</label>
+                                    <input type="text" class="form-control" id="deviceDescription">
+                                </div>
+                                <div class="mb-3">
+                                    <label for="deviceType" class="form-label">Type</label>
+                                    <select class="form-select" id="deviceType" required>
+                                        <option value="switch">Switch</option>
+                                        <option value="dimmer">Dimmer</option>
+                                        <option value="thermostat">Thermostat</option>
+                                    </select>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="deviceTopic" class="form-label">MQTT Topic</label>
+                                    <input type="text" class="form-control" id="deviceTopic" required>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="deviceThreshold" class="form-label">Price Threshold (SEK/kWh)</label>
+                                    <input type="number" step="0.01" class="form-control" id="deviceThreshold" value="1.00" required>
+                                </div>
+                                <button type="submit" class="btn btn-primary">Add Device</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Device Edit Modal -->
+    <div class="modal fade" id="editDeviceModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Edit Device</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="editDeviceForm">
+                        <input type="hidden" id="editDeviceId">
+                        <div class="mb-3">
+                            <label for="editDeviceName" class="form-label">Device Name</label>
+                            <input type="text" class="form-control" id="editDeviceName" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="editDeviceDescription" class="form-label">Description</label>
+                            <input type="text" class="form-control" id="editDeviceDescription">
+                        </div>
+                        <div class="mb-3">
+                            <label for="editDeviceType" class="form-label">Type</label>
+                            <select class="form-select" id="editDeviceType" required>
+                                <option value="switch">Switch</option>
+                                <option value="dimmer">Dimmer</option>
+                                <option value="thermostat">Thermostat</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label for="editDeviceTopic" class="form-label">MQTT Topic</label>
+                            <input type="text" class="form-control" id="editDeviceTopic" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="editDeviceThreshold" class="form-label">Price Threshold (SEK/kWh)</label>
+                            <input type="number" step="0.01" class="form-control" id="editDeviceThreshold" required>
+                        </div>
+                        <div class="form-check form-switch mb-3">
+                            <input class="form-check-input" type="checkbox" id="editDeviceEnabled">
+                            <label class="form-check-label" for="editDeviceEnabled">Device Enabled</label>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-danger me-auto" id="deleteDeviceBtn">Delete</button>
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="saveDeviceBtn">Save Changes</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast container for notifications -->
+    <div id="toastContainer" class="position-fixed bottom-0 end-0 p-3" style="z-index: 11"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.1/font/bootstrap-icons.css">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/mqtt/dist/mqtt.min.js"></script>
+    
+    <script>
+        // Global variables
+        window.devices = {};
+        // MQTT Client and Status
+        window.mqttClient = null;
+        window.mqttStatus = {
+            connected: false,
+            broker: '',
+            username: null,
+            tls: false
+        };
+
+        // MQTT Functions
+        async function updateMqttStatus() {
+            try {
+                const response = await fetch('/api/mqtt/status');
+                const status = await response.json();
+                
+                window.mqttStatus = status;
+                const indicator = document.getElementById('mqttStatusIndicator');
+                const statusText = document.getElementById('mqttStatusText');
+                const details = document.getElementById('mqttConnectionDetails');
+                
+                if (!indicator || !statusText || !details) return;
+                
+                if (status.connected) {
+                    indicator.className = 'bi bi-check-circle-fill text-success me-2';
+                    statusText.textContent = 'Connected';
+                    details.textContent = `Broker: ${status.broker}${status.username ? ` (as ${status.username})` : ''}`;
+                } else {
+                    indicator.className = 'bi bi-x-circle-fill text-danger me-2';
+                    statusText.textContent = 'Disconnected';
+                    details.textContent = 'Not connected to any MQTT broker';
+                }
+                
+                // Update MQTT settings form with current values
+                if (document.getElementById('mqttBroker')) {
+                    const [host, port] = status.broker.split(':');
+                    document.getElementById('mqttBroker').value = host || '';
+                    document.getElementById('mqttPort').value = port || '1883';
+                    document.getElementById('mqttUsername').value = status.username || '';
+                    document.getElementById('mqttTLS').checked = status.tls === true;
+                }
+            } catch (error) {
+                console.error('Error updating MQTT status:', error);
+            }
+        }
+        
+        async function saveMqttSettings(event) {
+            event.preventDefault();
+            
+            const settings = {
+                MQTT_BROKER_URL: document.getElementById('mqttBroker').value,
+                MQTT_BROKER_PORT: document.getElementById('mqttPort').value,
+                MQTT_USERNAME: document.getElementById('mqttUsername').value,
+                MQTT_PASSWORD: document.getElementById('mqttPassword').value,
+                MQTT_TLS_ENABLED: document.getElementById('mqttTLS').checked ? 'true' : 'false'
+            };
+            
+            const saveBtn = event.target.querySelector('button[type="submit"]');
+            const originalText = saveBtn.innerHTML;
+            saveBtn.disabled = true;
+            saveBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Saving...';
+            
+            try {
+                const response = await fetch('/api/mqtt/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(settings)
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    showToast('MQTT settings saved successfully', 'success');
+                    // Wait a moment before reloading to show the success message
+                    setTimeout(() => location.reload(), 1000);
+                } else {
+                    throw new Error(result.message || 'Failed to save MQTT settings');
+                }
+            } catch (error) {
+                console.error('Error saving MQTT settings:', error);
+                showToast(`Error: ${error.message}`, 'danger');
+            } finally {
+                saveBtn.disabled = false;
+                saveBtn.innerHTML = originalText;
+            }
+        }
+        window.currentEditDeviceId = null;
+        window.priceChart = null;
+        
+        // Initialize the application
+        document.addEventListener('DOMContentLoaded', () => {
+            // Initialize Bootstrap tooltips
+            const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+            tooltipTriggerList.map(function (tooltipTriggerEl) {
+                return new bootstrap.Tooltip(tooltipTriggerEl);
+            });
+            
+            // Initialize event listeners
+            const saveBtn = document.getElementById('saveDeviceBtn');
+            const deleteBtn = document.getElementById('deleteDeviceBtn');
+            const addForm = document.getElementById('addDeviceForm');
+            const tempInput = document.getElementById('outdoorTemp');
+            
+            if (saveBtn) saveBtn.addEventListener('click', saveDevice);
+            if (deleteBtn) deleteBtn.addEventListener('click', deleteDevice);
+            if (addForm) addForm.addEventListener('submit', addDevice);
+            if (tempInput) {
+                tempInput.addEventListener('input', () => {
+                    updateCheapestHours();
+                    updatePriceListChart();
+                });
+            }
+            
+            // Load initial data and update UI
+            fetchData().then(() => {
+                updatePriceListChart();
+                // Load devices after fetching initial data
+                return loadDevices();
+            }).then(() => {
+                console.log('Initial data and devices loaded');
+            });
+            
+            // Set up periodic updates
+            // Set up periodic updates
+            setInterval(() => {
+                fetchData().then(() => {
+                    updatePriceListChart();
+                });
+            }, 60000); // Update data every minute
+            
+            // Initialize toast container if it doesn't exist
+            if (!document.getElementById('toastContainer')) {
+                const toastContainer = document.createElement('div');
+                toastContainer.id = 'toastContainer';
+                toastContainer.className = 'position-fixed bottom-0 end-0 p-3';
+                toastContainer.style.zIndex = '11';
+                document.body.appendChild(toastContainer);
+            }
+        });
+    </script>
+
+    <div class="container py-4">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1 class="mb-0">Electricity Price Controller</h1>
+            <button class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#settingsModal">
+                <i class="bi bi-gear"></i> Settings
+            </button>
+        </div>
+        
+        <div class="row mb-4">
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">Price Overview</h5>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="priceChart"></canvas>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">Current Prices</h5>
+                    </div>
+                    <div class="card-body" id="currentPrices">
+                        <!-- Current prices will be inserted here by JavaScript -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">Device Control</h5>
+                    </div>
+                    <div class="card-body">
+                        <!-- Temperature Control -->
+                        <div class="row mb-4">
+                            <div class="col-md-6">
+                                <label for="outdoorTemp" class="form-label">Outdoor Temperature (°C)</label>
+                                <input type="number" class="form-control" id="outdoorTemp" value="15" step="0.1">
+                            </div>
+                            <div class="col-md-6">
+                                <label for="hoursToRun" class="form-label">Hours to Run (auto-calculated)</label>
+                                <input type="number" class="form-control" id="hoursToRun" readonly>
+                            </div>
+                        </div>
+                        
+                        <div class="row mb-4">
+                            <div class="col-12">
+                                <h5>Cheapest Hours to Run</h5>
+                                <div class="table-responsive">
+                                    <table class="table table-sm table-hover">
+                                        <thead>
+                                            <tr>
+                                                <th>Time</th>
+                                                <th>Price (SEK/kWh)</th>
+                                                <th>Date</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="cheapestHours">
+                                            <!-- Cheapest hours will be inserted here by JavaScript -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="row" id="devicesContainer">
+                            <!-- Device controls will be inserted here by JavaScript -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Price List Chart -->
+        <div class="row mt-4">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="card-title mb-0">Outdoor Temperature</h5>
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" role="switch" id="useAutoWeather" checked>
+                            <label class="form-check-label small" for="useAutoWeather">Auto</label>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div id="manualTempInput">
+                            <div class="input-group">
+                                <input type="number" class="form-control" id="outdoorTemp" step="0.1" value="15">
+                                <span class="input-group-text">°C</span>
+                            </div>
+                            <small class="text-muted">Enter current outdoor temperature</small>
+                        </div>
+                        <div id="autoWeatherInfo" class="d-none">
+                            <div class="d-flex align-items-center">
+                                <div class="me-3">
+                                    <i class="bi bi-cloud-sun fs-1"></i>
+                                </div>
+                                <div>
+                                    <h3 class="mb-0" id="currentTemp">--°C</h3>
+                                    <small class="text-muted" id="weatherLocation">Vänersborg</small>
+                                    <div class="small" id="weatherTime">Last updated: --:--</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">Hourly Prices</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="chart-container" style="position: relative; height:400px;">
+                            <canvas id="priceListChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Device Controls -->
+        <div class="row mt-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">Device Controls</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="deviceControls" class="row">
+                            <!-- Device controls will be added here dynamically -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let prices = [];
+        let devices = {};
+        let priceChart;
+        let priceListChart;
+        let cheapestHours = [];
+        let tempHourSettings = [
+            { temp: 15, hours: 4 },
+            { temp: 10, hours: 6 },
+            { temp: 5, hours: 10 },
+            { temp: 0, hours: 14 },
+            { temp: -5, hours: 16 }
+        ];
+        
+        // Location settings
+        let locationSettings = {
+            coordinates: '12.3167,58.3833',
+            name: 'Vänersborg',
+            useAutoWeather: true
+        };
+        
+        // Weather update interval (in milliseconds)
+        const WEATHER_UPDATE_INTERVAL = 30 * 60 * 1000; // 30 minutes
+
+        // Initialize MQTT client
+        const mqttBroker = 'ws://broker.hivemq.com:8000/mqtt';
+        const client = mqtt.connect(mqttBroker);
+
+        // Connect to MQTT broker
+        client.on('connect', () => {
+            console.log('Connected to MQTT broker');
+        });
+
+        // Fetch initial data
+        async function fetchData() {
+            try {
+                // Fetch prices
+                const pricesResponse = await fetch('/api/prices');
+                if (!pricesResponse.ok) {
+                    throw new Error(`Failed to fetch prices: ${pricesResponse.status}`);
+                }
+                const pricesData = await pricesResponse.json();
+                
+                if (!Array.isArray(pricesData) || pricesData.length === 0) {
+                    throw new Error('No price data received');
+                }
+                
+                // Update prices and log for debugging
+                console.log('Fetched prices:', pricesData);
+                prices = pricesData;
+                
+                // Update UI
+                updatePriceChart();
+                updateCurrentPrices();
+                updateCheapestHours();
+                updatePriceListChart();
+                
+                // Also update devices
+                await loadDevices();
+                
+                return Promise.resolve();
+                
+            } catch (error) {
+                console.error('Error fetching data:', error);
+                showToast(`Error: ${error.message}`, 'danger');
+                
+                // Fallback to sample data if API fails
+                const now = new Date();
+                prices = Array.from({length: 24}, (_, i) => ({
+                    time_start: new Date(now.getTime() + i * 60 * 60 * 1000).toISOString(),
+                    SEK_per_kWh: 1.0 + Math.random()
+                }));
+                updatePriceChart();
+                updateCurrentPrices();
+            }
+        }
+
+        // Calculate hours to run based on temperature using configured settings
+        function calculateHoursToRun(temperature) {
+            // Sort settings by temperature in descending order
+            const sortedSettings = [...tempHourSettings].sort((a, b) => b.temp - a.temp);
+            
+            console.log('Current temperature:', temperature);
+            console.log('Available settings:', sortedSettings);
+            
+            // Find the first setting where temperature is >= the setting's temperature
+            // (since we're looking for "this temperature or colder")
+            const setting = sortedSettings.find(s => temperature >= s.temp);
+            
+            console.log('Matched setting:', setting);
+            
+            // Return the hours from the found setting, or use the first setting if none found
+            return setting ? setting.hours : (sortedSettings[0]?.hours || 2);
+        }
+
+        // Update cheapest hours table
+        function updateCheapestHours() {
+            const hoursToRun = calculateHoursToRun(parseFloat(document.getElementById('outdoorTemp').value || 15));
+            document.getElementById('hoursToRun').value = hoursToRun;
+            
+            // Sort prices and take the cheapest hours
+            const sortedPrices = [...prices]
+                .filter(p => new Date(p.time_start) >= new Date())  // Only future hours
+                .sort((a, b) => a.SEK_per_kWh - b.SEK_per_kWh)
+                .slice(0, hoursToRun)
+                .sort((a, b) => new Date(a.time_start) - new Date(b.time_start));
+            
+            cheapestHours = sortedPrices;
+            
+            // Update the table
+            const tbody = document.getElementById('cheapestHours');
+            tbody.innerHTML = '';
+            
+            if (sortedPrices.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="3" class="text-center">No price data available</td></tr>';
+                return;
+            }
+            
+            sortedPrices.forEach(price => {
+                const date = new Date(price.time_start);
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${date.toLocaleTimeString('sv-SE', {hour: '2-digit', minute:'2-digit'})}</td>
+                    <td>${price.SEK_per_kWh.toFixed(2)}</td>
+                    <td>${new Date(price.date).toLocaleDateString('sv-SE')}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+        
+        // Update UI with current data
+        function updateUI() {
+            updatePriceChart();
+            updateCurrentPrices();
+            updateDeviceControls();
+            updateCheapestHours();
+            updatePriceListChart();
+        }
+
+        // Update the price list chart
+        function updatePriceListChart() {
+            const ctx = document.getElementById('priceListChart').getContext('2d');
+            
+            if (priceListChart) {
+                priceListChart.destroy();
+            }
+            
+            const now = new Date();
+            const sortedPrices = [...prices].sort((a, b) => 
+                new Date(a.time_start) - new Date(b.time_start)
+            );
+            
+            const labels = sortedPrices.map(price => {
+                const date = new Date(price.time_start);
+                return date.toLocaleTimeString('sv-SE', {hour: '2-digit', minute:'2-digit'});
+            });
+            
+            const data = sortedPrices.map(price => price.SEK_per_kWh);
+            
+            // Create background colors based on price and time
+            const backgroundColors = sortedPrices.map((price) => {
+                const isCheap = cheapestHours.some(hour => hour.time_start === price.time_start);
+                const priceTime = new Date(price.time_start);
+                const isPast = priceTime < now;
+                
+                if (isCheap) return 'rgba(25, 135, 84, 0.7)';
+                if (isPast) return 'rgba(108, 117, 125, 0.5)';
+                return 'rgba(13, 110, 253, 0.7)';
+            });
+            
+            priceListChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Price (SEK/kWh)',
+                        data: data,
+                        backgroundColor: backgroundColors,
+                        borderColor: 'rgba(0, 0, 0, 0.1)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: false,
+                            title: {
+                                display: true,
+                                text: 'SEK/kWh'
+                            },
+                            grid: {
+                                color: 'rgba(0, 0, 0, 0.05)'
+                            }
+                        },
+                        x: {
+                            grid: {
+                                display: false
+                            },
+                            ticks: {
+                                maxRotation: 90,
+                                minRotation: 90
+                            }
+                        }
+                    },
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const price = context.raw;
+                                    const date = new Date(sortedPrices[context.dataIndex].time_start);
+                                    const timeStr = date.toLocaleTimeString('sv-SE', {hour: '2-digit', minute:'2-digit'});
+                                    const dateStr = date.toLocaleDateString('sv-SE');
+                                    return [
+                                        `Time: ${timeStr}`,
+                                        `Date: ${dateStr}`,
+                                        `Price: ${price.toFixed(2)} SEK/kWh`
+                                    ];
+                                }
+                            }
+                        },
+                        legend: {
+                            display: false
+                        }
+                    }
+                }
+            });
+        }
+        
+        // Update the price chart
+        function updatePriceChart() {
+            const ctx = document.getElementById('priceChart').getContext('2d');
+            
+            if (priceChart) {
+                priceChart.destroy();
+            }
+            
+            // Get all prices for today and tomorrow
+            const now = new Date();
+            const tomorrow = new Date(now);
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            tomorrow.setHours(0, 0, 0, 0);
+            
+            // Sort all prices by time
+            const sortedPrices = [...prices].sort((a, b) => 
+                new Date(a.time_start) - new Date(b.time_start)
+            );
+            
+            // Find current time for the indicator
+            const currentHour = now.getHours();
+            const currentMinute = now.getMinutes();
+            const currentTimeStr = `${currentHour.toString().padStart(2, '0')}:${currentMinute.toString().padStart(2, '0')}`;
+            
+            const labels = sortedPrices.map(price => {
+                const date = new Date(price.time_start);
+                return date.toLocaleTimeString('sv-SE', {hour: '2-digit', minute:'2-digit'});
+            });
+            
+            const data = sortedPrices.map(price => price.SEK_per_kWh);
+            
+            // Highlight cheapest hours and current time
+            const backgroundColors = [];
+            const borderColors = [];
+            
+            sortedPrices.forEach((price, index) => {
+                const isCheap = cheapestHours.some(hour => hour.time_start === price.time_start);
+                const priceTime = new Date(price.time_start);
+                const isPast = priceTime < now;
+                
+                if (isCheap) {
+                    backgroundColors.push('rgba(25, 135, 84, 0.2)');
+                    borderColors.push('rgb(25, 135, 84)');
+                } else if (isPast) {
+                    backgroundColors.push('rgba(200, 200, 200, 0.2)');
+                    borderColors.push('rgba(200, 200, 200, 0.8)');
+                } else {
+                    backgroundColors.push('rgba(13, 110, 253, 0.2)');
+                    borderColors.push('rgb(13, 110, 253)');
+                }
+            });
+            
+            // Find current time index for vertical line
+            const currentTimeIndex = sortedPrices.findIndex(price => {
+                const priceTime = new Date(price.time_start);
+                return priceTime >= now;
+            });
+            
+            // Calculate average price for reference line
+            const avgPrice = data.reduce((sum, price) => sum + price, 0) / data.length;
+            
+            priceChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Price (SEK/kWh)',
+                            data: data,
+                            backgroundColor: backgroundColors,
+                            borderColor: borderColors,
+                            borderWidth: 1,
+                            tension: 0.3,
+                            fill: true,
+                            pointRadius: 3,
+                            pointHoverRadius: 5
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top',
+                        },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            callbacks: {
+                                label: function(context) {
+                                    const price = context.raw;
+                                    const date = new Date(sortedPrices[context.dataIndex].time_start);
+                                    const timeStr = date.toLocaleTimeString('sv-SE', {hour: '2-digit', minute:'2-digit'});
+                                    const dateStr = date.toLocaleDateString('sv-SE');
+                                    return [
+                                        `Time: ${timeStr}`,
+                                        `Date: ${dateStr}`,
+                                        `Price: ${price.toFixed(2)} SEK/kWh`
+                                    ];
+                                }
+                            }
+                        },
+                        annotation: {
+                            annotations: {
+                                currentTimeLine: {
+                                    type: 'line',
+                                    xMin: currentTimeIndex >= 0 ? currentTimeIndex - 0.5 : null,
+                                    xMax: currentTimeIndex >= 0 ? currentTimeIndex - 0.5 : null,
+                                    borderColor: 'rgba(255, 0, 0, 0.7)',
+                                    borderWidth: 2,
+                                    borderDash: [5, 5],
+                                    label: {
+                                        display: true,
+                                        content: 'Now: ' + currentTimeStr,
+                                        position: 'top',
+                                        backgroundColor: 'rgba(255, 255, 255, 0.8)',
+                                        color: '#ff0000',
+                                        font: {
+                                            weight: 'bold',
+                                            size: 10
+                                        }
+                                    }
+                                },
+                                averageLine: {
+                                    type: 'line',
+                                    yMin: avgPrice,
+                                    yMax: avgPrice,
+                                    borderColor: 'rgba(255, 99, 132, 0.7)',
+                                    borderWidth: 1,
+                                    borderDash: [3, 3],
+                                    label: {
+                                        display: true,
+                                        content: 'Avg: ' + avgPrice.toFixed(2) + ' SEK',
+                                        position: 'right',
+                                        backgroundColor: 'rgba(255, 255, 255, 0.8)',
+                                        color: '#ff6384',
+                                        font: {
+                                            weight: 'bold',
+                                            size: 10
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: false,
+                            title: {
+                                display: true,
+                                text: 'SEK/kWh'
+                            },
+                            grid: {
+                                color: 'rgba(0, 0, 0, 0.05)'
+                            }
+                        },
+                        x: {
+                            grid: {
+                                color: 'rgba(0, 0, 0, 0.02)'
+                            },
+                            ticks: {
+                                maxRotation: 45,
+                                minRotation: 45
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Update current prices display
+        function updateCurrentPrices() {
+            const currentHour = new Date().getHours();
+            const currentPrice = prices.find(p => {
+                const hour = new Date(p.time_start).getHours();
+                return hour === currentHour;
+            });
+            
+            const container = document.getElementById('currentPrices');
+            
+            if (currentPrice) {
+                container.innerHTML = `
+                    <div class="text-center">
+                        <h2>${currentPrice.SEK_per_kWh.toFixed(2)} SEK/kWh</h2>
+                        <p>Current hour (${currentHour}:00 - ${currentHour + 1}:00)</p>
+                    </div>
+                `;
+            } else {
+                container.innerHTML = '<p>No price data available for current hour</p>';
+            }
+        }
+        
+        // Update device controls
+        function updateDeviceControls() {
+            const container = document.getElementById('devicesContainer');
+            container.innerHTML = '';
+            
+            for (const [deviceId, device] of Object.entries(devices)) {
+                const card = document.createElement('div');
+                card.className = 'col-md-6 mb-3';
+                card.innerHTML = `
+                    <div class="card h-100">
+                        <div class="card-body">
+                            <h5 class="card-title">${deviceId}</h5>
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <span>Status:</span>
+                                <span class="badge bg-${device.state === 'on' ? 'success' : 'secondary'}">
+                                    ${device.state.toUpperCase()}
+                                </span>
+                            </div>
+                            <div class="mb-3">
+                                <label for="threshold-${deviceId}" class="form-label">
+                                    Price Threshold: ${device.threshold} SEK/kWh
+                                </label>
+                                <input type="range" class="form-range" id="threshold-${deviceId}" 
+                                    min="0" max="200" step="0.1" value="${device.threshold}"
+                                    onchange="updateThreshold('${deviceId}', this.value)">
+                            </div>
+                            <div class="d-flex justify-content-between">
+                                <span>0 SEK</span>
+                                <span>2 SEK</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                container.appendChild(card);
+            }
+        }
+        
+        // Update device threshold
+        async function updateThreshold(deviceId, threshold) {
+            try {
+                await fetch('/api/devices', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        id: deviceId,
+                        threshold: parseFloat(threshold)
+                    })
+                });
+                
+                // Update local devices object
+                if (devices[deviceId]) {
+                    devices[deviceId].threshold = parseFloat(threshold);
+                }
+                
+                // Update the UI to reflect the change
+                updateDeviceControls();
+            } catch (error) {
+                console.error('Error updating threshold:', error);
+            }
+        }
+        
+        // Initialize the application
+        document.addEventListener('DOMContentLoaded', () => {
+            // Initialize Bootstrap tooltips
+            const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+            tooltipTriggerList.map(function (tooltipTriggerEl) {
+                return new bootstrap.Tooltip(tooltipTriggerEl);
+            });
+            
+            // Initialize event listeners
+            const saveBtn = document.getElementById('saveDeviceBtn');
+            const deleteBtn = document.getElementById('deleteDeviceBtn');
+            const addForm = document.getElementById('addDeviceForm');
+            const tempInput = document.getElementById('outdoorTemp');
+            
+            if (saveBtn) saveBtn.addEventListener('click', saveDevice);
+            if (deleteBtn) deleteBtn.addEventListener('click', deleteDevice);
+            if (addForm) addForm.addEventListener('submit', addDevice);
+            if (tempInput) {
+                tempInput.addEventListener('input', () => {
+                    updateCheapestHours();
+                    updatePriceListChart();
+                });
+            }
+            
+            // Load initial data and update UI
+            fetchData().then(() => {
+                updatePriceListChart();
+                // Load devices after fetching initial data
+                return loadDevices();
+            }).then(() => {
+                console.log('Initial data and devices loaded');
+            });
+            
+            // Set up periodic updates
+            // Set up periodic updates
+            setInterval(() => {
+                fetchData().then(() => {
+                    updatePriceListChart();
+                });
+            }, 60000); // Update data every minute
+            
+            // Initialize toast container if it doesn't exist
+            if (!document.getElementById('toastContainer')) {
+                const toastContainer = document.createElement('div');
+                toastContainer.id = 'toastContainer';
+                toastContainer.className = 'position-fixed bottom-0 end-0 p-3';
+                toastContainer.style.zIndex = '11';
+                document.body.appendChild(toastContainer);
+            }
+        });
+        
+        // Device management functions
+        
+        // Load devices from server
+        async function loadDevices() {
+            try {
+                const response = await fetch('/api/devices');
+                const data = await response.json();
+                devices = data;
+                updateDeviceList();
+                updateDeviceControls(); // Make sure to update the device controls UI
+                return data; // Return the devices data
+            } catch (error) {
+                console.error('Error loading devices:', error);
+                return {}; // Return empty object on error
+            }
+        }
+        
+        // Update device list in settings
+        function updateDeviceList() {
+            const container = document.getElementById('devicesList');
+            container.innerHTML = '';
+            
+            for (const [id, device] of Object.entries(devices)) {
+                const item = document.createElement('div');
+                item.className = `list-group-item list-group-item-action d-flex justify-content-between align-items-center ${device.enabled ? '' : 'list-group-item-secondary'}`;
+                item.innerHTML = `
+                    <div>
+                        <h6 class="mb-1">${device.name || id} <span class="badge bg-${device.enabled ? 'success' : 'secondary'} rounded-pill">${device.enabled ? 'Enabled' : 'Disabled'}</span></h6>
+                        <small class="text-muted">${device.description || 'No description'}</small><br>
+                        <small>Threshold: ${device.threshold} SEK/kWh • Type: ${device.type} • Topic: ${device.mqtt_topic}</small>
+                    </div>
+                    <button class="btn btn-sm btn-outline-primary" onclick="editDevice('${id}')">
+                        <i class="bi bi-pencil"></i> Edit
+                    </button>
+                `;
+                container.appendChild(item);
+            }
+        }
+        
+        // Edit device
+        function editDevice(deviceId) {
+            const device = devices[deviceId];
+            if (!device) return;
+            
+            currentEditDeviceId = deviceId;
+            document.getElementById('editDeviceId').value = deviceId;
+            document.getElementById('editDeviceName').value = device.name || '';
+            document.getElementById('editDeviceDescription').value = device.description || '';
+            document.getElementById('editDeviceType').value = device.type || 'switch';
+            document.getElementById('editDeviceTopic').value = device.mqtt_topic || '';
+            document.getElementById('editDeviceThreshold').value = device.threshold || 1.0;
+            document.getElementById('editDeviceEnabled').checked = device.enabled !== false;
+            
+            // Show the modal
+            const modal = new bootstrap.Modal(document.getElementById('editDeviceModal'));
+            modal.show();
+        }
+        
+        // Save device changes
+        async function saveDevice() {
+            const deviceId = currentEditDeviceId;
+            if (!deviceId) return;
+            
+            const deviceData = {
+                id: deviceId,
+                name: document.getElementById('editDeviceName').value,
+                description: document.getElementById('editDeviceDescription').value,
+                type: document.getElementById('editDeviceType').value,
+                mqtt_topic: document.getElementById('editDeviceTopic').value,
+                threshold: parseFloat(document.getElementById('editDeviceThreshold').value),
+                enabled: document.getElementById('editDeviceEnabled').checked
+            };
+            
+            try {
+                const response = await fetch('/api/devices', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(deviceData)
+                });
+                
+                if (response.ok) {
+                    await loadDevices();
+                    bootstrap.Modal.getInstance(document.getElementById('editDeviceModal')).hide();
+                    showToast('Device updated successfully', 'success');
+                } else {
+                    const error = await response.json();
+                    throw new Error(error.message || 'Failed to update device');
+                }
+            } catch (error) {
+                console.error('Error saving device:', error);
+                showToast(`Error: ${error.message}`, 'danger');
+            }
+        }
+        
+        // Delete device
+        async function deleteDevice() {
+            if (!confirm('Are you sure you want to delete this device?')) return;
+            
+            try {
+                const response = await fetch(`/api/devices/${currentEditDeviceId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (response.ok) {
+                    await loadDevices();
+                    bootstrap.Modal.getInstance(document.getElementById('editDeviceModal')).hide();
+                    showToast('Device deleted successfully', 'success');
+                } else {
+                    const error = await response.json();
+                    throw new Error(error.message || 'Failed to delete device');
+                }
+            } catch (error) {
+                console.error('Error deleting device:', error);
+                showToast(`Error: ${error.message}`, 'danger');
+            }
+        }
+        
+        // Add new device
+        async function addDevice(event) {
+            event.preventDefault();
+            
+            const deviceData = {
+                name: document.getElementById('deviceName').value,
+                description: document.getElementById('deviceDescription').value,
+                type: document.getElementById('deviceType').value,
+                mqtt_topic: document.getElementById('deviceTopic').value,
+                threshold: parseFloat(document.getElementById('deviceThreshold').value)
+            };
+            
+            try {
+                const response = await fetch('/api/devices', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(deviceData)
+                });
+                
+                if (response.ok) {
+                    document.getElementById('addDeviceForm').reset();
+                    await loadDevices();
+                    showToast('Device added successfully', 'success');
+                    
+                    // Switch to devices tab
+                    const tab = new bootstrap.Tab(document.querySelector('#devices-tab'));
+                    tab.show();
+                } else {
+                    const error = await response.json();
+                    throw new Error(error.message || 'Failed to add device');
+                }
+            } catch (error) {
+                console.error('Error adding device:', error);
+                showToast(`Error: ${error.message}`, 'danger');
+            }
+        }
+        
+        // Show toast notification
+        function showToast(message, type = 'info') {
+            const toastContainer = document.getElementById('toastContainer');
+            const toastId = 'toast-' + Date.now();
+            const toast = document.createElement('div');
+            toast.className = `toast align-items-center text-white bg-${type} border-0`;
+            toast.id = toastId;
+            toast.setAttribute('role', 'alert');
+            toast.setAttribute('aria-live', 'assertive');
+            toast.setAttribute('aria-atomic', 'true');
+            toast.innerHTML = `
+                <div class="d-flex">
+                    <div class="toast-body">
+                        ${message}
+                    </div>
+                    <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+                </div>
+            `;
+            toastContainer.appendChild(toast);
+            
+            const bsToast = new bootstrap.Toast(toast, { autohide: true, delay: 3000 });
+            bsToast.show();
+            
+            toast.addEventListener('hidden.bs.toast', () => {
+                toast.remove();
+            });
+        }
+        
+        // Update device controls
+        function updateDeviceControls() {
+            const container = document.getElementById('deviceControls');
+            if (!container) return;
+            
+            container.innerHTML = '';
+            
+            for (const [id, device] of Object.entries(devices)) {
+                if (!device.enabled) continue;
+                
+                const isOn = device.state === 'on';
+                const card = document.createElement('div');
+                card.className = 'card mb-3';
+                card.innerHTML = `
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <h5 class="card-title mb-0">${device.name || id}</h5>
+                            <span class="badge bg-${device.type === 'switch' ? 'primary' : device.type === 'dimmer' ? 'info' : 'warning'}">
+                                ${device.type || 'device'}
+                            </span>
+                        </div>
+                        ${device.description ? `<p class="card-text text-muted small">${device.description}</p>` : ''}
+                        <div class="row g-3 align-items-center">
+                            <div class="col-auto">
+                                <label for="${id}-threshold" class="col-form-label">Threshold (SEK/kWh):</label>
+                            </div>
+                            <div class="col">
+                                <input type="number" class="form-control form-control-sm" id="${id}-threshold" 
+                                       value="${device.threshold}" step="0.01" min="0">
+                            </div>
+                            <div class="col-auto">
+                                <button class="btn btn-sm btn-outline-secondary" 
+                                        onclick="updateThreshold('${id}')">
+                                    Update
+                                </button>
+                            </div>
+                        </div>
+                        <div class="d-flex justify-content-between mt-3">
+                            <button class="btn ${isOn ? 'btn-danger' : 'btn-success'}" 
+                                    onclick="toggleDevice('${id}')"
+                                    ${!device.enabled ? 'disabled' : ''}>
+                                <i class="bi ${isOn ? 'bi-power' : 'bi-power'}"></i>
+                                ${isOn ? 'Turn Off' : 'Turn On'}
+                            </button>
+                            <span class="text-muted align-self-center">
+                                MQTT: <code>${device.mqtt_topic}</code>
+                            </span>
+                        </div>
+                    </div>
+                `;
+                container.appendChild(card);
+            }
+        }
+        
+        // Toggle device state
+        async function toggleDevice(deviceId) {
+            const device = devices[deviceId];
+            if (!device) return;
+            
+            const newState = device.state === 'on' ? 'off' : 'on';
+            
+            try {
+                // Update the server
+                const response = await fetch(`/api/devices/${deviceId}/state`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ state: newState })
+                });
+                
+                if (response.ok) {
+                    device.state = newState;
+                    updateDeviceControls();
+                    showToast(`${device.name || deviceId} turned ${newState}`, 'success');
+                } else {
+                    const error = await response.json();
+                    throw new Error(error.message || 'Failed to update device state');
+                }
+            } catch (error) {
+                console.error('Error toggling device:', error);
+                showToast(`Error: ${error.message}`, 'danger');
+            }
+        }
+        // Temperature settings management
+        function loadTempHourSettings() {
+            const settings = localStorage.getItem('tempHourSettings');
+            if (settings) {
+                tempHourSettings = JSON.parse(settings);
+            }
+            renderTempHourSettings();
+        }
+
+        function saveTempHourSettings() {
+            localStorage.setItem('tempHourSettings', JSON.stringify(tempHourSettings));
+            showToast('Temperature settings saved', 'success');
+            updateCheapestHours();
+            updatePriceListChart();
+        }
+
+        function renderTempHourSettings() {
+            const container = document.getElementById('tempHoursSettings');
+            if (!container) return;
+            
+            container.innerHTML = '';
+            
+            // Sort by temperature in descending order
+            const sortedSettings = [...tempHourSettings].sort((a, b) => b.temp - a.temp);
+            
+            sortedSettings.forEach((setting, index) => {
+                const settingDiv = document.createElement('div');
+                settingDiv.className = 'row g-2 mb-2 align-items-center';
+                settingDiv.innerHTML = `
+                    <div class="col-5">
+                        <div class="input-group input-group-sm">
+                            <input type="number" class="form-control temp-input" value="${setting.temp}" step="0.1">
+                            <span class="input-group-text">°C or below</span>
+                        </div>
+                    </div>
+                    <div class="col-5">
+                        <div class="input-group input-group-sm">
+                            <input type="number" class="form-control hours-input" value="${setting.hours}" min="1" max="24">
+                            <span class="input-group-text">hours</span>
+                        </div>
+                    </div>
+                    <div class="col-2">
+                        <button type="button" class="btn btn-sm btn-outline-danger" onclick="removeTempHourSetting(${index})">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                    </div>
+                `;
+                container.appendChild(settingDiv);
+            });
+        }
+
+        function addTempHourSetting() {
+            // Find the highest temperature and add a new setting 5°C below it
+            const maxTemp = tempHourSettings.length > 0 
+                ? Math.max(...tempHourSettings.map(s => s.temp)) 
+                : 25;
+                
+            tempHourSettings.push({
+                temp: maxTemp - 5,
+                hours: 4
+            });
+            renderTempHourSettings();
+        }
+
+        function removeTempHourSetting(index) {
+            if (tempHourSettings.length <= 1) {
+                showToast('You must have at least one temperature setting', 'warning');
+                return;
+            }
+            tempHourSettings.splice(index, 1);
+            renderTempHourSettings();
+        }
+
+        // Initialize settings when the page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            loadTempHourSettings();
+            loadLocationSettings();
+            
+            // Set up weather updates
+            if (locationSettings.useAutoWeather) {
+                updateWeather();
+                setInterval(updateWeather, WEATHER_UPDATE_INTERVAL);
+            }
+            
+            // Update settings when the save button is clicked
+            document.getElementById('settings-tab').addEventListener('shown.bs.tab', () => {
+                const container = document.getElementById('tempHoursSettings');
+                if (container) {
+                    const tempInputs = container.querySelectorAll('.temp-input');
+                    const hoursInputs = container.querySelectorAll('.hours-input');
+                    
+                    tempHourSettings = [];
+                    tempInputs.forEach((input, index) => {
+                        tempHourSettings.push({
+                            temp: parseFloat(input.value) || 0,
+                            hours: parseInt(hoursInputs[index].value) || 1
+                        });
+                    });
+                    
+                    // Sort by temperature in descending order
+                    tempHourSettings.sort((a, b) => b.temp - a.temp);
+                    
+                    // Ensure no duplicate temperatures
+                    const uniqueTemps = new Set();
+                    tempHourSettings = tempHourSettings.filter(setting => {
+                        if (uniqueTemps.has(setting.temp)) return false;
+                        uniqueTemps.add(setting.temp);
+                        return true;
+                    });
+                    
+                    renderTempHourSettings();
+                }
+            });
+        });
+
+        // Weather functions
+        async function updateWeather() {
+            if (!locationSettings.useAutoWeather) return;
+            
+            try {
+                const response = await fetch(`/api/current-weather?location=${encodeURIComponent(locationSettings.coordinates)}`);
+                if (!response.ok) throw new Error('Failed to fetch weather');
+                
+                const data = await response.json();
+                if (data.error) throw new Error(data.error);
+                
+                // Update the UI with weather data
+                document.getElementById('currentTemp').textContent = `${Math.round(data.temperature)}°C`;
+                document.getElementById('weatherLocation').textContent = locationSettings.name;
+                
+                const updateTime = new Date(data.time);
+                document.getElementById('weatherTime').textContent = 
+                    `Last updated: ${updateTime.toLocaleTimeString()}`;
+                
+                // Update the temperature input
+                document.getElementById('outdoorTemp').value = Math.round(data.temperature * 10) / 10;
+                
+                // Update the cheapest hours with new temperature
+                updateCheapestHours();
+                updatePriceListChart();
+                
+            } catch (error) {
+                console.error('Error updating weather:', error);
+                // Fall back to manual mode if weather fetch fails
+                toggleAutoWeather(false);
+                showToast('Failed to update weather. Switched to manual mode.', 'warning');
+            }
+        }
+        
+        function toggleAutoWeather(enable) {
+            locationSettings.useAutoWeather = enable;
+            localStorage.setItem('locationSettings', JSON.stringify(locationSettings));
+            
+            if (enable) {
+                document.getElementById('useAutoWeather').checked = true;
+                document.getElementById('manualTempInput').classList.add('d-none');
+                document.getElementById('autoWeatherInfo').classList.remove('d-none');
+                updateWeather();
+            } else {
+                document.getElementById('useAutoWeather').checked = false;
+                document.getElementById('manualTempInput').classList.remove('d-none');
+                document.getElementById('autoWeatherInfo').classList.add('d-none');
+            }
+        }
+        
+        function saveLocationSettings() {
+            const locationSelect = document.getElementById('locationName');
+            const selectedOption = locationSelect.options[locationSelect.selectedIndex];
+            
+            if (selectedOption.value === 'custom') {
+                const lat = document.getElementById('customLat').value;
+                const lon = document.getElementById('customLon').value;
+                if (!lat || !lon) {
+                    showToast('Please enter both latitude and longitude', 'warning');
+                    return;
+                }
+                locationSettings.coordinates = `${lon},${lat}`;
+                locationSettings.name = `Custom (${lat}, ${lon})`;
+            } else {
+                locationSettings.coordinates = selectedOption.value;
+                locationSettings.name = selectedOption.text;
+            }
+            
+            localStorage.setItem('locationSettings', JSON.stringify(locationSettings));
+            showToast('Location settings saved', 'success');
+            
+            if (locationSettings.useAutoWeather) {
+                updateWeather();
+            }
+        }
+        
+        function loadLocationSettings() {
+            const savedSettings = localStorage.getItem('locationSettings');
+            if (savedSettings) {
+                Object.assign(locationSettings, JSON.parse(savedSettings));
+            }
+            
+            // Update UI
+            document.getElementById('useAutoWeather').checked = locationSettings.useAutoWeather;
+            toggleAutoWeather(locationSettings.useAutoWeather);
+            
+            // Set up location selection
+            const locationSelect = document.getElementById('locationName');
+            const customOption = Array.from(locationSelect.options).find(opt => opt.value === 'custom');
+            
+            if (customOption && locationSettings.name.includes('Custom')) {
+                locationSelect.value = 'custom';
+                const [lon, lat] = locationSettings.coordinates.split(',');
+                document.getElementById('customLat').value = lat;
+                document.getElementById('customLon').value = lon;
+                document.getElementById('customCoords').classList.remove('d-none');
+            } else {
+                const matchingOption = Array.from(locationSelect.options).find(
+                    opt => opt.value === locationSettings.coordinates
+                );
+                if (matchingOption) {
+                    locationSelect.value = locationSettings.coordinates;
+                }
+            }
+            
+            // Set up event listeners
+            locationSelect.addEventListener('change', function() {
+                if (this.value === 'custom') {
+                    document.getElementById('customCoords').classList.remove('d-none');
+                } else {
+                    document.getElementById('customCoords').classList.add('d-none');
+                }
+            });
+            
+            document.getElementById('useAutoWeather').addEventListener('change', function() {
+                toggleAutoWeather(this.checked);
+            });
+        }
+        
+        // Make functions available globally
+        window.updateThreshold = updateThreshold;
+        window.addTempHourSetting = addTempHourSetting;
+        window.removeTempHourSetting = removeTempHourSetting;
+        window.saveTempHourSettings = saveTempHourSettings;
+        window.saveLocationSettings = saveLocationSettings;
+    </script>
+</body>
+</html>
+
+
+
